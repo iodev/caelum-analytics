@@ -58,6 +58,9 @@ class MachineNode:
     last_heartbeat: datetime
     caelum_version: str = "0.1.0"
     platform_info: Optional[dict] = None
+    cluster_id: Optional[str] = None  # Unique cluster identifier
+    cluster_name: Optional[str] = None  # Human-readable cluster name
+    machine_role: str = "node"  # node, coordinator, hybrid
     
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -84,6 +87,70 @@ class MachineRegistry:
         self.local_machine_id: Optional[str] = None
         self.heartbeat_interval = 30  # seconds
         self.offline_threshold = 90   # seconds
+        self.cluster_id = self._generate_cluster_id()
+        self.cluster_name = self._get_cluster_name()
+        
+    def _generate_cluster_id(self) -> str:
+        """Generate a unique cluster identifier."""
+        import uuid
+        import os
+        
+        # Try to load existing cluster ID from file
+        cluster_file = os.path.expanduser("~/.caelum/cluster_id")
+        if os.path.exists(cluster_file):
+            try:
+                with open(cluster_file, 'r') as f:
+                    return f.read().strip()
+            except Exception:
+                pass
+        
+        # Generate new cluster ID
+        cluster_id = str(uuid.uuid4())
+        
+        # Save cluster ID
+        try:
+            os.makedirs(os.path.dirname(cluster_file), exist_ok=True)
+            with open(cluster_file, 'w') as f:
+                f.write(cluster_id)
+        except Exception:
+            pass
+        
+        return cluster_id
+    
+    def _get_cluster_name(self) -> str:
+        """Get cluster name from environment or generate one."""
+        import os
+        
+        # Check environment variable first
+        cluster_name = os.getenv('CAELUM_CLUSTER_NAME')
+        if cluster_name:
+            return cluster_name
+        
+        # Try to load from config file
+        cluster_file = os.path.expanduser("~/.caelum/cluster_name")
+        if os.path.exists(cluster_file):
+            try:
+                with open(cluster_file, 'r') as f:
+                    return f.read().strip()
+            except Exception:
+                pass
+        
+        # Generate descriptive name based on hostname and location
+        hostname = socket.gethostname()
+        primary_ip = self._get_primary_ip([])
+        
+        # Create a readable cluster name
+        cluster_name = f"caelum-{hostname.lower()}-{primary_ip.split('.')[-1]}"
+        
+        # Save cluster name
+        try:
+            os.makedirs(os.path.dirname(cluster_file), exist_ok=True)
+            with open(cluster_file, 'w') as f:
+                f.write(cluster_name)
+        except Exception:
+            pass
+        
+        return cluster_name
         
     def get_local_machine_info(self) -> MachineNode:
         """Get information about the local machine."""
@@ -170,7 +237,10 @@ class MachineRegistry:
             running_services=running_services,
             available_ports=available_ports,
             last_heartbeat=datetime.now(timezone.utc),
-            platform_info=platform_info
+            platform_info=platform_info,
+            cluster_id=self.cluster_id,
+            cluster_name=self.cluster_name,
+            machine_role="coordinator"  # This machine is running the analytics dashboard
         )
         
         self.local_machine_id = machine_id
@@ -332,11 +402,166 @@ class MachineRegistry:
             "machines": [m.to_dict() for m in online_machines]
         }
     
-    def discover_network_machines(self, ip_range: str = "192.168.1.0/24") -> List[str]:
+    async def discover_network_machines(self, ip_range: str = None) -> List[str]:
         """Discover potential Caelum machines on the network."""
-        # This would implement network scanning for Caelum Analytics endpoints
-        # For now, return empty list - would be implemented in Phase 1 Week 2
-        return []
+        import subprocess
+        import ipaddress
+        from concurrent.futures import ThreadPoolExecutor
+        
+        discovered = []
+        
+        if ip_range is None:
+            # Auto-detect network range from primary interface
+            ip_range = self._get_network_range()
+        
+        if not ip_range:
+            return []
+        
+        try:
+            # Parse the network range
+            network = ipaddress.IPv4Network(ip_range, strict=False)
+            
+            # Limit scan to reasonable range for faster discovery
+            hosts_to_scan = list(network.hosts())[:100]  # Limit to first 100 IPs
+            
+            # Scan for machines with Caelum Analytics endpoints
+            with ThreadPoolExecutor(max_workers=20) as executor:
+                futures = []
+                for ip in hosts_to_scan:
+                    if str(ip) != self._get_primary_ip([]):  # Skip self
+                        futures.append(
+                            executor.submit(self._check_caelum_endpoint, str(ip))
+                        )
+                
+                for future in futures:
+                    result = future.result()
+                    if result:
+                        discovered.append(result)
+        
+        except Exception as e:
+            print(f"Network discovery error: {e}")
+        
+        return discovered
+    
+    def _get_network_range(self) -> Optional[str]:
+        """Get the network range for the primary interface."""
+        try:
+            # Get the primary IP and determine network
+            primary_ip = None
+            netmask = None
+            
+            for interface, addrs in psutil.net_if_addrs().items():
+                if interface.startswith(('lo', 'docker', 'br-')):
+                    continue
+                    
+                for addr in addrs:
+                    if addr.family == socket.AF_INET:
+                        ip = addr.address
+                        if not ip.startswith('127.') and addr.netmask:
+                            primary_ip = ip
+                            netmask = addr.netmask
+                            break
+                if primary_ip:
+                    break
+            
+            if primary_ip and netmask:
+                import ipaddress
+                network = ipaddress.IPv4Network(f"{primary_ip}/{netmask}", strict=False)
+                return str(network.network_address) + "/" + str(network.prefixlen)
+                
+        except Exception as e:
+            print(f"Error detecting network range: {e}")
+        
+        return None
+    
+    def _check_caelum_endpoint(self, ip: str) -> Optional[str]:
+        """Check if an IP has a Caelum Analytics endpoint."""
+        import requests
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        
+        # Ports to check for Caelum services
+        caelum_ports = [8090, 8080, 8100, 8101, 8102, 8103, 8104, 8105]
+        
+        for port in caelum_ports:
+            try:
+                # Quick connection check first
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    sock.settimeout(0.3)  # Shorter timeout
+                    if sock.connect_ex((ip, port)) != 0:
+                        continue
+                
+                # Try to get Caelum identification
+                session = requests.Session()
+                retry_strategy = Retry(total=1, backoff_factor=0.1)
+                adapter = HTTPAdapter(max_retries=retry_strategy)
+                session.mount("http://", adapter)
+                
+                urls_to_try = [
+                    f"http://{ip}:{port}/api/v1/machines",
+                    f"http://{ip}:{port}/api/v1/cluster/status", 
+                    f"http://{ip}:{port}/"
+                ]
+                
+                for url in urls_to_try:
+                    try:
+                        response = session.get(url, timeout=1)  # Shorter timeout
+                        if response.status_code == 200:
+                            # Check if response indicates Caelum system
+                            content = response.text.lower()
+                            if any(keyword in content for keyword in ['caelum', 'mcp', 'analytics', 'cluster']):
+                                return f"{ip}:{port}"
+                    except:
+                        continue
+                        
+            except Exception:
+                continue
+        
+        return None
+    
+    def get_cluster_info(self) -> dict:
+        """Get information about this cluster."""
+        return {
+            "cluster_id": self.cluster_id,
+            "cluster_name": self.cluster_name,
+            "total_machines": len(self.machines),
+            "online_machines": len(self.get_online_machines()),
+            "coordinator_machine": self.local_machine_id
+        }
+    
+    def get_discovered_clusters(self) -> Dict[str, dict]:
+        """Get information about discovered clusters."""
+        clusters = {}
+        
+        for machine in self.machines.values():
+            if machine.cluster_id and machine.cluster_id != self.cluster_id:
+                cluster_id = machine.cluster_id
+                if cluster_id not in clusters:
+                    clusters[cluster_id] = {
+                        "cluster_id": cluster_id,
+                        "cluster_name": machine.cluster_name or f"Unknown-{cluster_id[:8]}",
+                        "machines": [],
+                        "total_resources": {
+                            "cpu_cores": 0,
+                            "memory_total_gb": 0,
+                            "memory_available_gb": 0,
+                            "disk_total_gb": 0,
+                            "disk_available_gb": 0,
+                            "gpu_count": 0
+                        }
+                    }
+                
+                clusters[cluster_id]["machines"].append(machine.to_dict())
+                # Aggregate resources
+                res = clusters[cluster_id]["total_resources"]
+                res["cpu_cores"] += machine.resources.cpu_cores
+                res["memory_total_gb"] += machine.resources.memory_total_gb
+                res["memory_available_gb"] += machine.resources.memory_available_gb
+                res["disk_total_gb"] += machine.resources.disk_total_gb
+                res["disk_available_gb"] += machine.resources.disk_available_gb
+                res["gpu_count"] += len(machine.resources.gpu_info) if machine.resources.gpu_info else 0
+        
+        return clusters
 
 
 # Global machine registry instance

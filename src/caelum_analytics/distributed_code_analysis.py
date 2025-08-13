@@ -170,7 +170,8 @@ class DistributedCodeAnalyzer:
             session_id=task_id,
             task=analysis_task,
             chunk_assignments={},
-            results={}
+            results={},
+            start_time=datetime.now(timezone.utc)
         )
         
         self.active_sessions[task_id] = session
