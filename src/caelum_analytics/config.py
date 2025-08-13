@@ -4,7 +4,9 @@ import os
 from pathlib import Path
 from typing import List, Optional
 
-from pydantic import BaseSettings, Field
+from pydantic import Field
+from pydantic_settings import BaseSettings
+from .port_registry import port_registry
 
 
 class Settings(BaseSettings):
@@ -12,7 +14,7 @@ class Settings(BaseSettings):
 
     # Core Application Settings
     host: str = Field(default="0.0.0.0", env="CAELUM_ANALYTICS_HOST")
-    port: int = Field(default=8080, env="CAELUM_ANALYTICS_PORT")
+    port: int = Field(default=8090, env="CAELUM_ANALYTICS_PORT")  # Moved from 8080 to avoid cluster communication conflict
     debug: bool = Field(default=False, env="DEBUG")
     log_level: str = Field(default="info", env="LOG_LEVEL")
     
@@ -111,6 +113,20 @@ class Settings(BaseSettings):
             "caelum-user-profile",
             "caelum-workflow-orchestration"
         ]
+    
+    def validate_port_allocation(self) -> bool:
+        """Validate that this service's port doesn't conflict with other Caelum services."""
+        allocation = port_registry.get_allocation(self.port)
+        if allocation and allocation.service_name != "analytics-dashboard":
+            raise ValueError(
+                f"Port {self.port} is already allocated to {allocation.service_name} "
+                f"({allocation.purpose}). Please use a different port."
+            )
+        return True
+    
+    def get_port_registry_report(self) -> str:
+        """Get a comprehensive port allocation report for the Caelum ecosystem."""
+        return port_registry.generate_port_map_report()
 
 
 # Global settings instance

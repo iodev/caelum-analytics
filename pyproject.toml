@@ -28,9 +28,9 @@ dependencies = [
     "httpx>=0.25.0",
     "aiohttp>=3.9.0",
     "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
     
     # Real-time & WebSocket
-    "socketio>=5.10.0",
     "python-socketio[asyncio]>=5.10.0",
     
     # System Monitoring
@@ -56,7 +56,7 @@ dependencies = [
 ]
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 
 [project.optional-dependencies]
 dev = [
@@ -97,7 +97,7 @@ dev-dependencies = [
 
 [tool.black]
 line-length = 88
-target-version = ['py311']
+target-version = ['py312']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -120,7 +120,7 @@ line_length = 88
 known_first_party = ["caelum_analytics"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

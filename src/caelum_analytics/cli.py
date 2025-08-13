@@ -53,5 +53,23 @@ def collect():
     # This would start the actual data collectors
 
 
+@main.command()
+def ports():
+    """Show the Caelum ecosystem port allocation map."""
+    click.echo("🌐 Caelum Ecosystem Port Registry")
+    click.echo("=" * 50)
+    click.echo()
+    
+    # Validate current port
+    try:
+        settings.validate_port_allocation()
+        click.echo(f"✅ Analytics dashboard port {settings.port} is properly allocated")
+    except ValueError as e:
+        click.echo(f"⚠️  {e}")
+    
+    click.echo()
+    click.echo(settings.get_port_registry_report())
+
+
 if __name__ == "__main__":
     main()
