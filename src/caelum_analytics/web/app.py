@@ -15,9 +15,11 @@ from datetime import datetime, timezone
 from ..config import settings
 from ..machine_registry import machine_registry
 from ..port_registry import port_registry, ServiceType
-from ..cluster_protocol import cluster_node, ClusterMessage, MessageType
+from ..cluster_protocol import cluster_node, ClusterMessage, MessageType, shutdown_cluster_node, ClusterNode
 from ..distributed_code_analysis import distributed_analyzer, AnalysisType
 from ..port_enforcer import PortEnforcer, require_port
+from ..udp_beacon import get_udp_discovered_machines, trigger_udp_discovery
+from ..claude_sync import claude_sync
 
 # Create FastAPI application
 app = FastAPI(
@@ -72,11 +74,17 @@ cluster_server = None
 @app.on_event("startup")
 async def startup_event():
     """Start the cluster communication server on app startup."""
-    global cluster_server
+    global cluster_server, cluster_node
     try:
-        # Start cluster communication server on port 8080
+        # Initialize cluster node with configured port
+        if cluster_node is None:
+            from .. import cluster_protocol
+            cluster_protocol.cluster_node = ClusterNode(port=settings.cluster_communication_port)
+            cluster_node = cluster_protocol.cluster_node
+            
+        # Start cluster communication server
         cluster_server = await cluster_node.start_server(host="0.0.0.0")
-        print(f"🌐 Cluster communication server started on port 8080")
+        print(f"🌐 Cluster communication server started on port {settings.cluster_communication_port}")
     except Exception as e:
         print(f"⚠️ Failed to start cluster server: {e}")
 
@@ -89,6 +97,9 @@ async def shutdown_event():
         cluster_server.close()
         await cluster_server.wait_closed()
         print("🌐 Cluster communication server stopped")
+    
+    # Shutdown cluster node and UDP discovery
+    await shutdown_cluster_node()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1135,6 +1146,19 @@ async def get_distributed_port_map():
 @app.get("/api/v1/cluster/status")
 async def get_cluster_status():
     """Get cluster communication status and connected machines."""
+    if cluster_node is None:
+        return {
+            "cluster_server_running": False,
+            "local_machine_id": None,
+            "connected_machines": [],
+            "discovered_machines": [],
+            "pending_tasks": 0,
+            "resource_reservations": 0,
+            "communication_port": settings.cluster_communication_port,
+            "message_handlers": 0,
+            "error": "Cluster node not initialized"
+        }
+        
     return {
         "cluster_server_running": cluster_server is not None,
         "local_machine_id": cluster_node.machine_id,
@@ -1142,7 +1166,7 @@ async def get_cluster_status():
         "discovered_machines": list(cluster_node.discovered_machines.keys()),
         "pending_tasks": len(cluster_node.pending_tasks),
         "resource_reservations": len(cluster_node.resource_reservations),
-        "communication_port": 8080,
+        "communication_port": settings.cluster_communication_port,
         "message_handlers": len(cluster_node.message_handlers),
     }
 
@@ -1150,8 +1174,11 @@ async def get_cluster_status():
 @app.post("/api/v1/cluster/connect")
 async def connect_to_machine(request: dict):
     """Connect to another machine in the cluster."""
+    if cluster_node is None:
+        return {"error": "Cluster node not initialized"}
+        
     host = request.get("host")
-    port = request.get("port", 8080)
+    port = request.get("port", settings.cluster_communication_port)
 
     if not host:
         return {"error": "Host is required"}
@@ -1165,8 +1192,20 @@ async def connect_to_machine(request: dict):
 
 @app.post("/api/v1/cluster/discover")
 async def discover_network_machines():
-    """Trigger network discovery for Caelum machines."""
-    # Send discovery broadcast
+    """Trigger network discovery for Caelum machines using both UDP beacons and WebSocket scanning."""
+    if cluster_node is None:
+        return {
+            "status": "error",
+            "message": "Cluster node not initialized",
+            "udp_discovered": 0,
+            "udp_discovered_machines": [],
+            "discovered_endpoints": [],
+            "connection_attempts": [],
+            "connected_machines": 0,
+            "discovered_machines": 0,
+        }
+    
+    # Send discovery broadcast via WebSocket
     message = ClusterMessage(
         message_id=str(uuid.uuid4()),
         message_type=MessageType.MACHINE_DISCOVER,
@@ -1176,11 +1215,38 @@ async def discover_network_machines():
 
     await cluster_node.broadcast_message(message)
 
-    # First do actual network scanning
+    # Trigger UDP beacon discovery
+    udp_discovered = trigger_udp_discovery()
+    
+    # Also do traditional network scanning
     discovered_endpoints = await machine_registry.discover_network_machines()
 
     # Try to connect to discovered endpoints
     connection_attempts = []
+    
+    # Connect to UDP discovered machines
+    for machine_info in udp_discovered:
+        host = machine_info.get('primary_ip') or machine_info.get('sender_ip')
+        port = machine_info.get('websocket_port', 8080)
+        
+        if host:
+            try:
+                success = await cluster_node.connect_to_machine(host, port)
+                connection_attempts.append({
+                    "endpoint": f"{host}:{port}",
+                    "connected": success,
+                    "method": "UDP_BEACON",
+                    "hostname": machine_info.get('hostname', 'Unknown')
+                })
+            except Exception as e:
+                connection_attempts.append({
+                    "endpoint": f"{host}:{port}",
+                    "connected": False,
+                    "method": "UDP_BEACON",
+                    "error": str(e)
+                })
+    
+    # Connect to traditionally discovered endpoints
     for endpoint in discovered_endpoints:
         if ":" in endpoint:
             host, port = endpoint.split(":", 1)
@@ -1188,15 +1254,19 @@ async def discover_network_machines():
                 port = int(port)
                 if port == 8080:  # Only connect to cluster communication ports
                     success = await cluster_node.connect_to_machine(host, port)
-                    connection_attempts.append(
-                        {"endpoint": endpoint, "connected": success}
-                    )
+                    connection_attempts.append({
+                        "endpoint": endpoint,
+                        "connected": success,
+                        "method": "NETWORK_SCAN"
+                    })
             except ValueError:
                 continue
 
     return {
         "status": "discovery_completed",
-        "message": "Network discovery and connection attempts completed",
+        "message": "Network discovery completed using UDP beacons and network scanning",
+        "udp_discovered": len(udp_discovered),
+        "udp_discovered_machines": udp_discovered,
         "discovered_endpoints": discovered_endpoints,
         "connection_attempts": connection_attempts,
         "connected_machines": len(cluster_node.connections),
@@ -1312,6 +1382,17 @@ async def distribute_task(request: dict):
         "status": "task_distributed",
         "task_id": task.task_id,
         "recipients": len(cluster_node.connections),
+    }
+
+
+@app.get("/api/v1/udp/discovered")
+async def get_udp_discovered_machines_endpoint():
+    """Get machines discovered via UDP beacons."""
+    discovered = get_udp_discovered_machines()
+    return {
+        "udp_discovered_machines": discovered,
+        "total_discovered": len(discovered),
+        "discovery_method": "UDP_BEACON",
     }
 
 
@@ -1499,6 +1580,79 @@ async def benchmark_distributed_vs_single():
         benchmark_results["single_machine"] = {"execution_time": 0, "error": str(e)}
 
     return {"benchmark_results": benchmark_results}
+
+
+@app.get("/api/v1/claude/configs")
+async def get_claude_configs():
+    """Get local Claude configurations."""
+    configs = claude_sync.scan_local_configs()
+    return {
+        "local_configs": {k: {
+            "config_type": v.config_type,
+            "config_name": v.config_name, 
+            "file_path": v.file_path,
+            "checksum": v.checksum,
+            "last_modified": v.last_modified,
+            "environment": v.environment,
+            "size_bytes": len(v.content)
+        } for k, v in configs.items()},
+        "total_configs": len(configs),
+        "config_types": list(set(v.config_type for v in configs.values())),
+        "environment": claude_sync.environment
+    }
+
+
+@app.post("/api/v1/claude/sync")
+async def sync_claude_configs(request: dict):
+    """Synchronize Claude configurations to cluster machines."""
+    config_types = request.get("config_types", list(claude_sync.config_paths.keys()))
+    target_machines = request.get("target_machines", [])
+    
+    try:
+        request_id = await claude_sync.sync_config_to_cluster(
+            config_types=config_types,
+            target_machines=target_machines
+        )
+        
+        return {
+            "status": "sync_initiated",
+            "request_id": request_id,
+            "config_types": config_types,
+            "target_machines": target_machines or "all_machines",
+            "message": f"Claude configuration sync initiated with ID: {request_id}"
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "message": "Failed to initiate Claude configuration sync"
+        }
+
+
+@app.get("/api/v1/claude/sync/{request_id}/status")
+async def get_sync_status(request_id: str):
+    """Get the status of a Claude configuration sync request."""
+    status = claude_sync.get_sync_status(request_id)
+    
+    if status is None:
+        return {"error": "Sync request not found", "request_id": request_id}
+        
+    return status
+
+
+@app.post("/api/v1/claude/scan")
+async def scan_claude_configs():
+    """Scan and refresh local Claude configurations."""
+    configs = claude_sync.scan_local_configs()
+    
+    return {
+        "status": "scan_completed",
+        "configs_found": len(configs),
+        "config_types": list(set(v.config_type for v in configs.values())),
+        "environments_detected": [claude_sync.environment],
+        "message": f"Scanned and found {len(configs)} Claude configurations"
+    }
 
 
 @app.websocket("/ws/live")
