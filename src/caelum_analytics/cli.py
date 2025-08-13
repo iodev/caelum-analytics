@@ -38,11 +38,30 @@ def status():
     click.echo("🔍 Checking MCP server status...")
     servers = settings.get_mcp_servers_list()
     
-    for i, server in enumerate(servers):
-        status = "🟢 ONLINE" if i < 16 else "🔴 OFFLINE"  # Simulated
+    online_count = 0
+    for server in servers:
+        # Check if server is actually running by attempting to connect to its port
+        from .port_registry import port_registry
+        allocation = port_registry.get_service_location(server)
+        is_online = False
+        
+        if allocation:
+            import socket
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    sock.settimeout(1)
+                    result = sock.connect_ex(('localhost', allocation.port))
+                    is_online = result == 0
+            except Exception:
+                is_online = False
+        
+        status = "🟢 ONLINE" if is_online else "🔴 OFFLINE"
         click.echo(f"  {server}: {status}")
+        
+        if is_online:
+            online_count += 1
     
-    click.echo(f"\n📊 Summary: 16/20 servers online")
+    click.echo(f"\n📊 Summary: {online_count}/{len(servers)} servers online")
 
 
 @main.command()

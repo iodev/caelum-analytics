@@ -473,28 +473,297 @@ class ClusterNode:
                 available_gpu >= required_gpu)
     
     async def _process_distributed_task(self, task: TaskDistribution):
-        """Process a distributed task (placeholder for actual implementation)."""
+        """Process a distributed task based on its type."""
         logger.info(f"Processing distributed task: {task.task_type}")
         
-        # Simulate task processing
-        await asyncio.sleep(2)
+        try:
+            # Route task to appropriate handler based on task type
+            if task.task_type == 'code_analysis':
+                result = await self._process_code_analysis_task(task)
+            elif task.task_type == 'integration_testing':
+                result = await self._process_integration_testing_task(task)
+            elif task.task_type == 'ai_inference':
+                result = await self._process_ai_inference_task(task)
+            elif task.task_type == 'data_processing':
+                result = await self._process_data_processing_task(task)
+            else:
+                raise ValueError(f"Unknown task type: {task.task_type}")
+            
+            # Send completion message
+            completion_message = ClusterMessage(
+                message_id=str(uuid.uuid4()),
+                message_type=MessageType.TASK_COMPLETE,
+                source_machine=self.machine_id,
+                payload={
+                    'task_id': task.task_id,
+                    'status': 'completed',
+                    'result': result
+                }
+            )
+            await self.broadcast_message(completion_message)
+            
+        except Exception as e:
+            logger.error(f"Task {task.task_id} failed: {e}")
+            
+            # Send failure message
+            failure_message = ClusterMessage(
+                message_id=str(uuid.uuid4()),
+                message_type=MessageType.TASK_FAILED,
+                source_machine=self.machine_id,
+                payload={
+                    'task_id': task.task_id,
+                    'status': 'failed',
+                    'error': str(e)
+                }
+            )
+            await self.broadcast_message(failure_message)
         
-        # Send completion message
-        completion_message = ClusterMessage(
-            message_id=str(uuid.uuid4()),
-            message_type=MessageType.TASK_COMPLETE,
-            source_machine=self.machine_id,
-            payload={
-                'task_id': task.task_id,
-                'status': 'completed',
-                'result': {'message': f'Task {task.task_type} completed successfully'}
-            }
+        finally:
+            # Remove from pending tasks
+            if task.task_id in self.pending_tasks:
+                del self.pending_tasks[task.task_id]
+    
+    async def _process_code_analysis_task(self, task: TaskDistribution) -> Dict[str, Any]:
+        """Process a code analysis task."""
+        from .distributed_code_analysis import distributed_analyzer, AnalysisType
+        
+        payload = task.payload
+        chunk_data = payload.get('chunk', {})
+        analysis_type = AnalysisType(payload.get('analysis_type', 'static_analysis'))
+        configuration = payload.get('configuration', {})
+        
+        # Import and reconstruct chunk
+        from .distributed_code_analysis import CodeChunk
+        chunk = CodeChunk(
+            chunk_id=chunk_data.get('chunk_id'),
+            file_paths=chunk_data.get('file_paths', []),
+            total_lines=chunk_data.get('total_lines', 0),
+            size_bytes=chunk_data.get('size_bytes', 0),
+            file_types=chunk_data.get('file_types', []),
+            complexity_estimate=chunk_data.get('complexity_estimate', 1)
         )
-        await self.broadcast_message(completion_message)
         
-        # Remove from pending tasks
-        if task.task_id in self.pending_tasks:
-            del self.pending_tasks[task.task_id]
+        # Process the chunk
+        results = await distributed_analyzer._analyze_code_chunk(chunk, analysis_type, configuration)
+        
+        return {
+            'task_type': 'code_analysis',
+            'chunk_id': chunk.chunk_id,
+            'analysis_results': results,
+            'processing_time': results.get('processing_time', 0)
+        }
+    
+    async def _process_integration_testing_task(self, task: TaskDistribution) -> Dict[str, Any]:
+        """Process an integration testing task using Caelum Integration Testing MCP server."""
+        import httpx
+        import time
+        from ..port_registry import port_registry
+        
+        payload = task.payload
+        test_suite = payload.get('test_suite', [])
+        test_config = payload.get('configuration', {})
+        
+        start_time = time.time()
+        
+        # Find Caelum Integration Testing MCP server
+        testing_allocation = port_registry.get_service_location('caelum-integration-testing')
+        if not testing_allocation:
+            raise ValueError("Caelum Integration Testing MCP server not found in port registry")
+        
+        testing_url = f"http://{testing_allocation.ip_address or 'localhost'}:{testing_allocation.port}"
+        
+        try:
+            # Prepare test execution request for Integration Testing MCP server
+            testing_request = {
+                'test_suite': test_suite,
+                'configuration': test_config,
+                'distributed_task_id': task.task_id,
+                'parallel_execution': True,
+                'timeout': test_config.get('timeout', 300)
+            }
+            
+            async with httpx.AsyncClient(timeout=600.0) as client:  # Longer timeout for tests
+                # Send request to Integration Testing MCP server
+                response = await client.post(
+                    f"{testing_url}/mcp/execute-tests",
+                    json=testing_request,
+                    headers={'Content-Type': 'application/json'}
+                )
+                
+                if response.status_code == 200:
+                    result_data = response.json()
+                    execution_time = time.time() - start_time
+                    
+                    return {
+                        'task_type': 'integration_testing',
+                        'tests_run': result_data.get('tests_run', 0),
+                        'tests_passed': result_data.get('tests_passed', 0),
+                        'tests_failed': result_data.get('tests_failed', 0),
+                        'test_results': result_data.get('test_results', []),
+                        'execution_time': execution_time,
+                        'status': 'completed',
+                        'mcp_server': 'caelum-integration-testing',
+                        'mcp_response': result_data
+                    }
+                else:
+                    raise ValueError(f"Integration Testing MCP server error: {response.status_code} - {response.text}")
+                    
+        except httpx.ConnectError:
+            # Fallback: try to start or connect to the MCP server
+            raise ValueError(f"Could not connect to Caelum Integration Testing MCP server at {testing_url}")
+        except Exception as e:
+            return {
+                'task_type': 'integration_testing',
+                'tests_run': 0,
+                'tests_passed': 0,
+                'tests_failed': 0,
+                'test_results': [],
+                'execution_time': time.time() - start_time,
+                'status': 'failed',
+                'error': f"MCP server communication failed: {str(e)}",
+                'mcp_server': 'caelum-integration-testing'
+            }
+    
+    async def _process_ai_inference_task(self, task: TaskDistribution) -> Dict[str, Any]:
+        """Process an AI inference task using local Ollama pool."""
+        import httpx
+        from ..port_registry import port_registry
+        
+        payload = task.payload
+        model_name = payload.get('model_name', 'default')
+        input_data = payload.get('input_data', {})
+        inference_config = payload.get('configuration', {})
+        
+        # Find Ollama pool MCP server
+        ollama_allocation = port_registry.get_service_location('caelum-ollama-pool')
+        if not ollama_allocation:
+            raise ValueError("Ollama pool MCP server not found in port registry")
+        
+        ollama_url = f"http://{ollama_allocation.ip_address or 'localhost'}:{ollama_allocation.port}"
+        
+        start_time = time.time()
+        
+        try:
+            # Prepare inference request for Ollama
+            inference_request = {
+                'model': model_name,
+                'prompt': input_data.get('prompt', ''),
+                'system': input_data.get('system', ''),
+                'context': input_data.get('context', []),
+                'options': inference_config
+            }
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # Send request to Ollama pool
+                response = await client.post(
+                    f"{ollama_url}/api/generate",
+                    json=inference_request
+                )
+                
+                if response.status_code == 200:
+                    result_data = response.json()
+                    inference_time = time.time() - start_time
+                    
+                    return {
+                        'task_type': 'ai_inference',
+                        'model_name': model_name,
+                        'input_processed': True,
+                        'inference_time': inference_time,
+                        'result': {
+                            'status': 'completed',
+                            'output': result_data.get('response', ''),
+                            'context': result_data.get('context', []),
+                            'total_duration': result_data.get('total_duration', 0),
+                            'load_duration': result_data.get('load_duration', 0),
+                            'prompt_eval_count': result_data.get('prompt_eval_count', 0),
+                            'eval_count': result_data.get('eval_count', 0)
+                        }
+                    }
+                else:
+                    raise ValueError(f"Ollama API error: {response.status_code} - {response.text}")
+                    
+        except Exception as e:
+            return {
+                'task_type': 'ai_inference',
+                'model_name': model_name,
+                'input_processed': False,
+                'inference_time': time.time() - start_time,
+                'result': {
+                    'status': 'failed',
+                    'error': str(e)
+                }
+            }
+    
+    async def _process_data_processing_task(self, task: TaskDistribution) -> Dict[str, Any]:
+        """Process a data processing task using Caelum Analytics MCP server."""
+        import httpx
+        import time
+        from ..port_registry import port_registry
+        
+        payload = task.payload
+        data_source = payload.get('data_source', '')
+        processing_type = payload.get('processing_type', 'transform')
+        config = payload.get('configuration', {})
+        
+        start_time = time.time()
+        
+        # Find Caelum Analytics Metrics MCP server
+        analytics_allocation = port_registry.get_service_location('caelum-analytics-metrics')
+        if not analytics_allocation:
+            raise ValueError("Caelum Analytics Metrics MCP server not found in port registry")
+        
+        analytics_url = f"http://{analytics_allocation.ip_address or 'localhost'}:{analytics_allocation.port}"
+        
+        try:
+            # Prepare data processing request for Analytics MCP server
+            processing_request = {
+                'data_source': data_source,
+                'processing_type': processing_type,
+                'configuration': config,
+                'distributed_task_id': task.task_id
+            }
+            
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                # Send request to Analytics MCP server
+                response = await client.post(
+                    f"{analytics_url}/mcp/data-processing",
+                    json=processing_request,
+                    headers={'Content-Type': 'application/json'}
+                )
+                
+                if response.status_code == 200:
+                    result_data = response.json()
+                    processing_time = time.time() - start_time
+                    
+                    return {
+                        'task_type': 'data_processing',
+                        'processing_type': processing_type,
+                        'data_source': data_source,
+                        'records_processed': result_data.get('records_processed', 0),
+                        'records_output': result_data.get('records_output', 0),
+                        'processing_time': processing_time,
+                        'status': 'completed',
+                        'output_path': result_data.get('output_path'),
+                        'mcp_server': 'caelum-analytics-metrics',
+                        'mcp_response': result_data
+                    }
+                else:
+                    raise ValueError(f"Analytics MCP server error: {response.status_code} - {response.text}")
+                    
+        except httpx.ConnectError:
+            # Fallback: try to start or connect to the MCP server
+            raise ValueError(f"Could not connect to Caelum Analytics MCP server at {analytics_url}")
+        except Exception as e:
+            return {
+                'task_type': 'data_processing',
+                'processing_type': processing_type,
+                'data_source': data_source,
+                'records_processed': 0,
+                'processing_time': time.time() - start_time,
+                'status': 'failed',
+                'error': f"MCP server communication failed: {str(e)}",
+                'mcp_server': 'caelum-analytics-metrics'
+            }
 
 
 # Global cluster node instance

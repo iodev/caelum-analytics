@@ -10,7 +10,7 @@ from typing import List
 import json
 import asyncio
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..config import settings
 from ..machine_registry import machine_registry
@@ -959,20 +959,45 @@ async def dashboard():
 async def get_servers():
     """Get list of all MCP servers and their status."""
     servers = settings.get_mcp_servers_list()
+    server_statuses = []
+    
+    for server in servers:
+        # Check if server is actually running
+        from ..port_registry import port_registry
+        allocation = port_registry.get_service_location(server)
+        is_online = False
+        response_time = "timeout"
+        
+        if allocation:
+            import socket
+            import time
+            try:
+                start_time = time.time()
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    sock.settimeout(2)
+                    result = sock.connect_ex(('localhost', allocation.port))
+                    is_online = result == 0
+                    if is_online:
+                        response_time = f"{int((time.time() - start_time) * 1000)}ms"
+            except Exception:
+                is_online = False
+        
+        server_statuses.append({
+            "name": server,
+            "status": "online" if is_online else "offline",
+            "response_time": response_time,
+            "port": allocation.port if allocation else "unknown",
+            "last_check": datetime.now(timezone.utc).isoformat()
+        })
+    
+    online_count = sum(1 for s in server_statuses if s["status"] == "online")
+    
     return {
-        "servers": [
-            {
-                "name": server,
-                "status": "online" if i < 16 else "offline",  # Simulated data
-                "response_time": f"{(i * 10) + 20}ms",
-                "last_check": "2025-08-13T21:30:00Z"
-            }
-            for i, server in enumerate(servers)
-        ],
+        "servers": server_statuses,
         "summary": {
             "total": len(servers),
-            "online": 16,
-            "offline": 4
+            "online": online_count,
+            "offline": len(servers) - online_count
         }
     }
 
@@ -1352,40 +1377,94 @@ async def get_analysis_types():
 @app.post("/api/v1/analysis/benchmark")
 async def benchmark_distributed_vs_single():
     """Benchmark distributed analysis vs single-machine analysis."""
-    # This would implement performance comparison
-    # For now, return mock benchmark data
+    import time
+    import psutil
+    from pathlib import Path
     
-    return {
-        "benchmark_results": {
-            "test_codebase": "/tmp/test_project",
-            "files_analyzed": 1250,
-            "total_lines": 45000,
-            "single_machine": {
-                "execution_time": 180.5,
-                "cpu_usage": 85.2,
-                "memory_usage": 2.1
-            },
-            "distributed_3_machines": {
-                "execution_time": 62.3,
-                "cpu_usage": 45.7,
-                "memory_usage": 1.4,
-                "speedup_factor": 2.9,
-                "efficiency": 96.7
-            },
-            "distributed_5_machines": {
-                "execution_time": 41.8,
-                "cpu_usage": 32.1,
-                "memory_usage": 1.0,
-                "speedup_factor": 4.3,
-                "efficiency": 86.0
-            }
-        },
-        "recommendations": {
-            "optimal_machines": 4,
-            "optimal_chunk_size": 50,
-            "expected_speedup": "4.1x faster"
-        }
+    # Use current project as test codebase
+    test_codebase = "/home/rford/dev/caelum-analytics/src"
+    if not Path(test_codebase).exists():
+        return {"error": "Test codebase not found"}
+    
+    benchmark_results = {
+        "test_codebase": test_codebase,
+        "benchmark_timestamp": datetime.now(timezone.utc).isoformat()
     }
+    
+    try:
+        # Run single machine analysis
+        single_start = time.time()
+        initial_memory = psutil.virtual_memory().used / (1024**3)
+        
+        session_id = await distributed_analyzer.analyze_codebase(
+            test_codebase,
+            AnalysisType.STATIC_ANALYSIS,
+            target_machines=[cluster_node.machine_id]  # Force single machine
+        )
+        
+        # Wait for completion
+        while True:
+            status = distributed_analyzer.get_session_status(session_id)
+            if not status or status['status'] in ['completed', 'failed']:
+                break
+            await asyncio.sleep(0.5)
+        
+        single_time = time.time() - single_start
+        final_memory = psutil.virtual_memory().used / (1024**3)
+        memory_used = max(0, final_memory - initial_memory)
+        
+        # Get analysis results
+        final_status = distributed_analyzer.get_session_status(session_id)
+        files_analyzed = final_status.get('chunks_total', 0) if final_status else 0
+        
+        benchmark_results.update({
+            "files_analyzed": files_analyzed,
+            "single_machine": {
+                "execution_time": round(single_time, 2),
+                "memory_usage_gb": round(memory_used, 2),
+                "chunks_processed": final_status.get('chunks_completed', 0) if final_status else 0
+            }
+        })
+        
+        # Calculate distributed projections based on available machines
+        available_machines = len(cluster_node.connections) + 1  # +1 for local machine
+        
+        if available_machines > 1:
+            # Estimate distributed performance
+            for machine_count in [min(3, available_machines), min(5, available_machines)]:
+                if machine_count <= available_machines:
+                    # Theoretical speedup with efficiency factors
+                    efficiency = max(0.7, 1.0 - (machine_count - 1) * 0.1)  # Diminishing returns
+                    estimated_time = single_time / (machine_count * efficiency)
+                    speedup = single_time / estimated_time
+                    
+                    benchmark_results[f"distributed_{machine_count}_machines"] = {
+                        "execution_time": round(estimated_time, 2),
+                        "estimated": True,
+                        "speedup_factor": round(speedup, 1),
+                        "efficiency": round(efficiency * 100, 1),
+                        "memory_usage_gb": round(memory_used / machine_count, 2)
+                    }
+        
+        # Recommendations
+        optimal_machines = min(4, max(2, available_machines))
+        expected_speedup = min(optimal_machines * 0.8, single_time / 10)  # Realistic expectations
+        
+        benchmark_results["recommendations"] = {
+            "optimal_machines": optimal_machines,
+            "available_machines": available_machines,
+            "expected_speedup": f"{expected_speedup:.1f}x faster",
+            "chunk_size_recommendation": min(50, max(10, files_analyzed // optimal_machines))
+        }
+        
+    except Exception as e:
+        benchmark_results["error"] = f"Benchmark failed: {str(e)}"
+        benchmark_results["single_machine"] = {
+            "execution_time": 0,
+            "error": str(e)
+        }
+    
+    return {"benchmark_results": benchmark_results}
 
 
 @app.websocket("/ws/live")
