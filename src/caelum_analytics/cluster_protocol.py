@@ -12,6 +12,7 @@ import logging
 
 from .machine_registry import machine_registry, MachineNode
 from .port_registry import port_registry
+from .udp_beacon import udp_beacon, start_udp_beacon_discovery, stop_udp_beacon_discovery
 
 
 logger = logging.getLogger(__name__)
@@ -137,6 +138,9 @@ class ClusterNode:
 
         # Register default message handlers
         self._register_default_handlers()
+        
+        # Setup UDP beacon discovery callback
+        udp_beacon.add_discovery_callback(self._handle_udp_discovery)
 
     def _register_default_handlers(self):
         """Register default message handlers."""
@@ -171,6 +175,10 @@ class ClusterNode:
         # Start WebSocket server
         server = await websockets.serve(handle_client, host, self.port)
         logger.info(f"Cluster communication server started on ws://{host}:{self.port}")
+
+        # Start UDP beacon discovery
+        start_udp_beacon_discovery()
+        logger.info(f"UDP beacon discovery started on port 8181")
 
         # Announce our presence to the network
         await self._announce_machine()
@@ -496,6 +504,24 @@ class ClusterNode:
             and available_gpu >= required_gpu
         )
 
+    def _handle_udp_discovery(self, machine_info: dict):
+        """Handle machine discovered via UDP beacon."""
+        try:
+            machine_id = machine_info['machine_id']
+            websocket_port = machine_info.get('websocket_port', 8080)
+            
+            # Get the IP to connect to
+            connect_ip = machine_info.get('primary_ip') or machine_info.get('sender_ip')
+            
+            if connect_ip and machine_id not in self.connections:
+                logger.info(f"🎯 Attempting WebSocket connection to UDP-discovered machine: {machine_info['hostname']} ({connect_ip})")
+                
+                # Try to establish WebSocket connection
+                asyncio.create_task(self.connect_to_machine(connect_ip, websocket_port))
+                
+        except Exception as e:
+            logger.error(f"Failed to handle UDP discovery: {e}")
+
     async def _process_distributed_task(self, task: TaskDistribution):
         """Process a distributed task based on its type."""
         logger.info(f"Processing distributed task: {task.task_type}")
@@ -815,5 +841,14 @@ class ClusterNode:
             }
 
 
-# Global cluster node instance
-cluster_node = ClusterNode(port=8080)
+# Global cluster node instance - port will be set by startup
+cluster_node = None
+
+
+async def shutdown_cluster_node():
+    """Shutdown cluster node and cleanup resources."""
+    try:
+        stop_udp_beacon_discovery()
+        logger.info("Cluster node shutdown complete")
+    except Exception as e:
+        logger.error(f"Error during cluster shutdown: {e}")

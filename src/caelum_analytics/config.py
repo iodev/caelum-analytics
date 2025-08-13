@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     ws_max_connections: int = Field(default=100, env="WS_MAX_CONNECTIONS")
     ws_heartbeat_interval: int = Field(default=30, env="WS_HEARTBEAT_INTERVAL")
 
+    # Cluster Communication
+    cluster_communication_port: int = Field(default=8081, env="CLUSTER_COMMUNICATION_PORT")
+
     # Notification Services (Optional)
     pushover_user_key: Optional[str] = Field(default=None, env="PUSHOVER_USER_KEY")
     pushover_api_token: Optional[str] = Field(default=None, env="PUSHOVER_API_TOKEN")
