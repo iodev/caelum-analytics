@@ -1,0 +1,22 @@
+{
+  "name": "@caelum/port-guardian",
+  "version": "1.0.0",
+  "description": "MCP server that actively manages and prevents port conflicts",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "net": "^1.0.2",
+    "node-port-check": "^2.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  }
+}

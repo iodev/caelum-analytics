@@ -17,6 +17,7 @@ from ..machine_registry import machine_registry
 from ..port_registry import port_registry, ServiceType
 from ..cluster_protocol import cluster_node, ClusterMessage, MessageType
 from ..distributed_code_analysis import distributed_analyzer, AnalysisType
+from ..port_enforcer import PortEnforcer, require_port
 
 # Create FastAPI application
 app = FastAPI(
@@ -24,7 +25,7 @@ app = FastAPI(
     description="Real-time monitoring and analytics for Caelum MCP Server System",
     version="0.1.0",
     docs_url="/api/docs",
-    redoc_url="/api/redoc"
+    redoc_url="/api/redoc",
 )
 
 # Add CORS middleware
@@ -39,6 +40,7 @@ app.add_middleware(
 # Mount static files and templates
 app.mount("/static", StaticFiles(directory=settings.static_dir), name="static")
 templates = Jinja2Templates(directory=settings.templates_dir)
+
 
 # WebSocket connection manager
 class ConnectionManager:
@@ -60,6 +62,7 @@ class ConnectionManager:
                 # Remove failed connections
                 self.active_connections.remove(connection)
 
+
 manager = ConnectionManager()
 
 # Cluster communication server
@@ -78,7 +81,7 @@ async def startup_event():
         print(f"⚠️ Failed to start cluster server: {e}")
 
 
-@app.on_event("shutdown") 
+@app.on_event("shutdown")
 async def shutdown_event():
     """Clean shutdown of cluster communication."""
     global cluster_server
@@ -960,45 +963,49 @@ async def get_servers():
     """Get list of all MCP servers and their status."""
     servers = settings.get_mcp_servers_list()
     server_statuses = []
-    
+
     for server in servers:
         # Check if server is actually running
         from ..port_registry import port_registry
+
         allocation = port_registry.get_service_location(server)
         is_online = False
         response_time = "timeout"
-        
+
         if allocation:
             import socket
             import time
+
             try:
                 start_time = time.time()
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     sock.settimeout(2)
-                    result = sock.connect_ex(('localhost', allocation.port))
+                    result = sock.connect_ex(("localhost", allocation.port))
                     is_online = result == 0
                     if is_online:
                         response_time = f"{int((time.time() - start_time) * 1000)}ms"
             except Exception:
                 is_online = False
-        
-        server_statuses.append({
-            "name": server,
-            "status": "online" if is_online else "offline",
-            "response_time": response_time,
-            "port": allocation.port if allocation else "unknown",
-            "last_check": datetime.now(timezone.utc).isoformat()
-        })
-    
+
+        server_statuses.append(
+            {
+                "name": server,
+                "status": "online" if is_online else "offline",
+                "response_time": response_time,
+                "port": allocation.port if allocation else "unknown",
+                "last_check": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
     online_count = sum(1 for s in server_statuses if s["status"] == "online")
-    
+
     return {
         "servers": server_statuses,
         "summary": {
             "total": len(servers),
             "online": online_count,
-            "offline": len(servers) - online_count
-        }
+            "offline": len(servers) - online_count,
+        },
     }
 
 
@@ -1009,10 +1016,10 @@ async def get_machines():
     if machine_registry.local_machine_id is None:
         local_machine = machine_registry.get_local_machine_info()
         machine_registry.register_machine(local_machine)
-    
+
     # Sync port registry with machine registry
     port_registry.update_from_machine_registry(machine_registry)
-    
+
     return machine_registry.get_machine_summary()
 
 
@@ -1048,7 +1055,7 @@ async def service_discovery():
     """Get service discovery information for the distributed network."""
     # Sync registries
     port_registry.update_from_machine_registry(machine_registry)
-    
+
     return {
         "distributed_services": port_registry.get_distributed_service_map(),
         "service_endpoints": {
@@ -1056,8 +1063,8 @@ async def service_discovery():
             "apis": port_registry.find_service_endpoints(ServiceType.API),
             "websockets": port_registry.find_service_endpoints(ServiceType.WEBSOCKET),
             "mcp_servers": port_registry.find_service_endpoints(ServiceType.MCP_SERVER),
-            "monitoring": port_registry.find_service_endpoints(ServiceType.MONITORING)
-        }
+            "monitoring": port_registry.find_service_endpoints(ServiceType.MONITORING),
+        },
     }
 
 
@@ -1071,8 +1078,12 @@ async def get_service_location(service_name: str):
             "port": location.port,
             "machine_id": location.machine_id,
             "ip_address": location.ip_address,
-            "endpoint": f"{location.ip_address}:{location.port}" if location.ip_address else None,
-            "status": location.status
+            "endpoint": (
+                f"{location.ip_address}:{location.port}"
+                if location.ip_address
+                else None
+            ),
+            "status": location.status,
         }
     else:
         return {"error": "Service not found"}
@@ -1083,7 +1094,7 @@ async def get_distributed_port_map():
     """Get the enhanced port allocation map with machine assignments."""
     # Sync registries first
     port_registry.update_from_machine_registry(machine_registry)
-    
+
     return {
         "port_allocations": {
             str(port): {
@@ -1093,17 +1104,31 @@ async def get_distributed_port_map():
                 "purpose": alloc.purpose,
                 "machine_id": alloc.machine_id,
                 "ip_address": alloc.ip_address,
-                "endpoint": f"{alloc.ip_address}:{alloc.port}" if alloc.ip_address else None,
-                "status": alloc.status
+                "endpoint": (
+                    f"{alloc.ip_address}:{alloc.port}" if alloc.ip_address else None
+                ),
+                "status": alloc.status,
             }
             for port, alloc in port_registry.get_all_allocations().items()
         },
         "machine_services": port_registry.get_distributed_service_map(),
         "summary": {
             "total_ports": len(port_registry.get_all_allocations()),
-            "assigned_to_machines": len([a for a in port_registry.get_all_allocations().values() if a.machine_id]),
-            "available_for_assignment": len([a for a in port_registry.get_all_allocations().values() if not a.machine_id])
-        }
+            "assigned_to_machines": len(
+                [
+                    a
+                    for a in port_registry.get_all_allocations().values()
+                    if a.machine_id
+                ]
+            ),
+            "available_for_assignment": len(
+                [
+                    a
+                    for a in port_registry.get_all_allocations().values()
+                    if not a.machine_id
+                ]
+            ),
+        },
     }
 
 
@@ -1118,23 +1143,23 @@ async def get_cluster_status():
         "pending_tasks": len(cluster_node.pending_tasks),
         "resource_reservations": len(cluster_node.resource_reservations),
         "communication_port": 8080,
-        "message_handlers": len(cluster_node.message_handlers)
+        "message_handlers": len(cluster_node.message_handlers),
     }
 
 
 @app.post("/api/v1/cluster/connect")
 async def connect_to_machine(request: dict):
     """Connect to another machine in the cluster."""
-    host = request.get('host')
-    port = request.get('port', 8080)
-    
+    host = request.get("host")
+    port = request.get("port", 8080)
+
     if not host:
         return {"error": "Host is required"}
-    
+
     success = await cluster_node.connect_to_machine(host, port)
     return {
         "success": success,
-        "message": f"{'Connected to' if success else 'Failed to connect to'} {host}:{port}"
+        "message": f"{'Connected to' if success else 'Failed to connect to'} {host}:{port}",
     }
 
 
@@ -1146,37 +1171,36 @@ async def discover_network_machines():
         message_id=str(uuid.uuid4()),
         message_type=MessageType.MACHINE_DISCOVER,
         source_machine=cluster_node.machine_id or "unknown",
-        payload={"discovery_request": True}
+        payload={"discovery_request": True},
     )
-    
+
     await cluster_node.broadcast_message(message)
-    
+
     # First do actual network scanning
     discovered_endpoints = await machine_registry.discover_network_machines()
-    
+
     # Try to connect to discovered endpoints
     connection_attempts = []
     for endpoint in discovered_endpoints:
-        if ':' in endpoint:
-            host, port = endpoint.split(':', 1)
+        if ":" in endpoint:
+            host, port = endpoint.split(":", 1)
             try:
                 port = int(port)
                 if port == 8080:  # Only connect to cluster communication ports
                     success = await cluster_node.connect_to_machine(host, port)
-                    connection_attempts.append({
-                        "endpoint": endpoint,
-                        "connected": success
-                    })
+                    connection_attempts.append(
+                        {"endpoint": endpoint, "connected": success}
+                    )
             except ValueError:
                 continue
-    
+
     return {
         "status": "discovery_completed",
         "message": "Network discovery and connection attempts completed",
         "discovered_endpoints": discovered_endpoints,
         "connection_attempts": connection_attempts,
         "connected_machines": len(cluster_node.connections),
-        "discovered_machines": len(cluster_node.discovered_machines)
+        "discovered_machines": len(cluster_node.discovered_machines),
     }
 
 
@@ -1190,35 +1214,35 @@ async def get_cluster_info():
             "total_machines": len(machine_registry.machines),
             "total_clusters": 1 + len(machine_registry.get_discovered_clusters()),
             "cluster_connections": len(cluster_node.connections),
-            "cluster_server_running": cluster_server is not None
-        }
+            "cluster_server_running": cluster_server is not None,
+        },
     }
 
 
 @app.post("/api/v1/cluster/broadcast")
 async def broadcast_message(request: dict):
     """Broadcast a custom message to all cluster machines."""
-    message_type = request.get('message_type', 'STATUS_BROADCAST')
-    payload = request.get('payload', {})
-    
+    message_type = request.get("message_type", "STATUS_BROADCAST")
+    payload = request.get("payload", {})
+
     try:
         msg_type = MessageType(message_type)
     except ValueError:
         return {"error": f"Invalid message type: {message_type}"}
-    
+
     message = ClusterMessage(
         message_id=str(uuid.uuid4()),
         message_type=msg_type,
         source_machine=cluster_node.machine_id or "unknown",
-        payload=payload
+        payload=payload,
     )
-    
+
     await cluster_node.broadcast_message(message)
-    
+
     return {
         "status": "message_broadcast",
         "message_id": message.message_id,
-        "recipients": len(cluster_node.connections)
+        "recipients": len(cluster_node.connections),
     }
 
 
@@ -1235,7 +1259,7 @@ async def get_distributed_tasks():
                 "assigned_machines": task.assigned_machines,
                 "priority": task.priority,
                 "estimated_duration": task.estimated_duration,
-                "created_at": task.created_at.isoformat()
+                "created_at": task.created_at.isoformat(),
             }
             for task in cluster_node.pending_tasks.values()
         ],
@@ -1248,10 +1272,10 @@ async def get_distributed_tasks():
                 "gpu_count": res.gpu_count,
                 "duration_seconds": res.duration_seconds,
                 "task_id": res.task_id,
-                "reserved_at": res.reserved_at.isoformat()
+                "reserved_at": res.reserved_at.isoformat(),
             }
             for res in cluster_node.resource_reservations.values()
-        ]
+        ],
     }
 
 
@@ -1259,71 +1283,71 @@ async def get_distributed_tasks():
 async def distribute_task(request: dict):
     """Distribute a task across the cluster."""
     from ..cluster_protocol import TaskDistribution
-    
+
     task_data = {
-        'task_id': str(uuid.uuid4()),
-        'task_type': request.get('task_type', 'unknown'),
-        'service_name': request.get('service_name', 'caelum-code-analysis'),
-        'source_machine': cluster_node.machine_id or "unknown",
-        'assigned_machines': request.get('assigned_machines', []),
-        'payload': request.get('payload', {}),
-        'priority': request.get('priority', 5),
-        'estimated_duration': request.get('estimated_duration', 60)
+        "task_id": str(uuid.uuid4()),
+        "task_type": request.get("task_type", "unknown"),
+        "service_name": request.get("service_name", "caelum-code-analysis"),
+        "source_machine": cluster_node.machine_id or "unknown",
+        "assigned_machines": request.get("assigned_machines", []),
+        "payload": request.get("payload", {}),
+        "priority": request.get("priority", 5),
+        "estimated_duration": request.get("estimated_duration", 60),
     }
-    
+
     task = TaskDistribution(**task_data)
     cluster_node.pending_tasks[task.task_id] = task
-    
+
     # Broadcast task distribution message
     message = ClusterMessage(
         message_id=str(uuid.uuid4()),
         message_type=MessageType.TASK_DISTRIBUTE,
         source_machine=cluster_node.machine_id or "unknown",
-        payload={'task': task_data}
+        payload={"task": task_data},
     )
-    
+
     await cluster_node.broadcast_message(message)
-    
+
     return {
         "status": "task_distributed",
         "task_id": task.task_id,
-        "recipients": len(cluster_node.connections)
+        "recipients": len(cluster_node.connections),
     }
 
 
 @app.post("/api/v1/analysis/start")
 async def start_distributed_analysis(request: dict):
     """Start distributed code analysis."""
-    source_path = request.get('source_path')
-    analysis_type_str = request.get('analysis_type', 'static_analysis')
-    configuration = request.get('configuration', {})
-    target_machines = request.get('target_machines', [])
-    
+    source_path = request.get("source_path")
+    analysis_type_str = request.get("analysis_type", "static_analysis")
+    configuration = request.get("configuration", {})
+    target_machines = request.get("target_machines", [])
+
     if not source_path:
         return {"error": "source_path is required"}
-    
+
     try:
         # Convert analysis type string to enum
         analysis_type = AnalysisType(analysis_type_str)
     except ValueError:
         return {"error": f"Invalid analysis type: {analysis_type_str}"}
-    
+
     try:
         # Start distributed analysis
         session_id = await distributed_analyzer.analyze_codebase(
             source_path=source_path,
             analysis_type=analysis_type,
             configuration=configuration,
-            target_machines=target_machines
+            target_machines=target_machines,
         )
-        
+
         return {
             "status": "analysis_started",
             "session_id": session_id,
             "analysis_type": analysis_type_str,
-            "source_path": source_path
+            "source_path": source_path,
         }
-        
+
     except Exception as e:
         return {"error": f"Failed to start analysis: {str(e)}"}
 
@@ -1332,10 +1356,10 @@ async def start_distributed_analysis(request: dict):
 async def get_analysis_status(session_id: str):
     """Get status of distributed analysis session."""
     status = distributed_analyzer.get_session_status(session_id)
-    
+
     if not status:
         return {"error": "Analysis session not found"}
-    
+
     return status
 
 
@@ -1343,12 +1367,12 @@ async def get_analysis_status(session_id: str):
 async def list_analysis_sessions():
     """List all active analysis sessions."""
     sessions = distributed_analyzer.list_active_sessions()
-    
+
     return {
         "active_sessions": sessions,
         "total_sessions": len(sessions),
-        "running_sessions": len([s for s in sessions if s['status'] == 'running']),
-        "completed_sessions": len([s for s in sessions if s['status'] == 'completed'])
+        "running_sessions": len([s for s in sessions if s["status"] == "running"]),
+        "completed_sessions": len([s for s in sessions if s["status"] == "completed"]),
     }
 
 
@@ -1359,15 +1383,15 @@ async def get_analysis_types():
         "analysis_types": [
             {
                 "value": analysis_type.value,
-                "name": analysis_type.value.replace('_', ' ').title(),
+                "name": analysis_type.value.replace("_", " ").title(),
                 "description": {
                     "static_analysis": "Syntax errors, warnings, and code smells",
-                    "security_scan": "Security vulnerabilities and risk assessment", 
+                    "security_scan": "Security vulnerabilities and risk assessment",
                     "complexity_metrics": "Cyclomatic complexity and maintainability",
                     "dependency_analysis": "Package dependencies and imports",
                     "code_quality": "Coding standards and best practices",
-                    "performance_profiling": "Performance bottlenecks and optimization"
-                }.get(analysis_type.value, "Code analysis")
+                    "performance_profiling": "Performance bottlenecks and optimization",
+                }.get(analysis_type.value, "Code analysis"),
             }
             for analysis_type in AnalysisType
         ]
@@ -1380,90 +1404,100 @@ async def benchmark_distributed_vs_single():
     import time
     import psutil
     from pathlib import Path
-    
+
     # Use current project as test codebase
     test_codebase = "/home/rford/dev/caelum-analytics/src"
     if not Path(test_codebase).exists():
         return {"error": "Test codebase not found"}
-    
+
     benchmark_results = {
         "test_codebase": test_codebase,
-        "benchmark_timestamp": datetime.now(timezone.utc).isoformat()
+        "benchmark_timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    
+
     try:
         # Run single machine analysis
         single_start = time.time()
         initial_memory = psutil.virtual_memory().used / (1024**3)
-        
+
         session_id = await distributed_analyzer.analyze_codebase(
             test_codebase,
             AnalysisType.STATIC_ANALYSIS,
-            target_machines=[cluster_node.machine_id]  # Force single machine
+            target_machines=[cluster_node.machine_id],  # Force single machine
         )
-        
+
         # Wait for completion
         while True:
             status = distributed_analyzer.get_session_status(session_id)
-            if not status or status['status'] in ['completed', 'failed']:
+            if not status or status["status"] in ["completed", "failed"]:
                 break
             await asyncio.sleep(0.5)
-        
+
         single_time = time.time() - single_start
         final_memory = psutil.virtual_memory().used / (1024**3)
         memory_used = max(0, final_memory - initial_memory)
-        
+
         # Get analysis results
         final_status = distributed_analyzer.get_session_status(session_id)
-        files_analyzed = final_status.get('chunks_total', 0) if final_status else 0
-        
-        benchmark_results.update({
-            "files_analyzed": files_analyzed,
-            "single_machine": {
-                "execution_time": round(single_time, 2),
-                "memory_usage_gb": round(memory_used, 2),
-                "chunks_processed": final_status.get('chunks_completed', 0) if final_status else 0
+        files_analyzed = final_status.get("chunks_total", 0) if final_status else 0
+
+        benchmark_results.update(
+            {
+                "files_analyzed": files_analyzed,
+                "single_machine": {
+                    "execution_time": round(single_time, 2),
+                    "memory_usage_gb": round(memory_used, 2),
+                    "chunks_processed": (
+                        final_status.get("chunks_completed", 0) if final_status else 0
+                    ),
+                },
             }
-        })
-        
+        )
+
         # Calculate distributed projections based on available machines
         available_machines = len(cluster_node.connections) + 1  # +1 for local machine
-        
+
         if available_machines > 1:
             # Estimate distributed performance
-            for machine_count in [min(3, available_machines), min(5, available_machines)]:
+            for machine_count in [
+                min(3, available_machines),
+                min(5, available_machines),
+            ]:
                 if machine_count <= available_machines:
                     # Theoretical speedup with efficiency factors
-                    efficiency = max(0.7, 1.0 - (machine_count - 1) * 0.1)  # Diminishing returns
+                    efficiency = max(
+                        0.7, 1.0 - (machine_count - 1) * 0.1
+                    )  # Diminishing returns
                     estimated_time = single_time / (machine_count * efficiency)
                     speedup = single_time / estimated_time
-                    
+
                     benchmark_results[f"distributed_{machine_count}_machines"] = {
                         "execution_time": round(estimated_time, 2),
                         "estimated": True,
                         "speedup_factor": round(speedup, 1),
                         "efficiency": round(efficiency * 100, 1),
-                        "memory_usage_gb": round(memory_used / machine_count, 2)
+                        "memory_usage_gb": round(memory_used / machine_count, 2),
                     }
-        
+
         # Recommendations
         optimal_machines = min(4, max(2, available_machines))
-        expected_speedup = min(optimal_machines * 0.8, single_time / 10)  # Realistic expectations
-        
+        expected_speedup = min(
+            optimal_machines * 0.8, single_time / 10
+        )  # Realistic expectations
+
         benchmark_results["recommendations"] = {
             "optimal_machines": optimal_machines,
             "available_machines": available_machines,
             "expected_speedup": f"{expected_speedup:.1f}x faster",
-            "chunk_size_recommendation": min(50, max(10, files_analyzed // optimal_machines))
+            "chunk_size_recommendation": min(
+                50, max(10, files_analyzed // optimal_machines)
+            ),
         }
-        
+
     except Exception as e:
         benchmark_results["error"] = f"Benchmark failed: {str(e)}"
-        benchmark_results["single_machine"] = {
-            "execution_time": 0,
-            "error": str(e)
-        }
-    
+        benchmark_results["single_machine"] = {"execution_time": 0, "error": str(e)}
+
     return {"benchmark_results": benchmark_results}
 
 
@@ -1473,32 +1507,40 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         # Send initial data
-        await websocket.send_text(json.dumps({
-            "type": "connection",
-            "data": {"message": "Connected to Caelum Analytics"}
-        }))
-        
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "connection",
+                    "data": {"message": "Connected to Caelum Analytics"},
+                }
+            )
+        )
+
         # Keep connection alive and send periodic updates
         while True:
             # This would be replaced with real data collection
             await asyncio.sleep(5)
-            await websocket.send_text(json.dumps({
-                "type": "heartbeat",
-                "data": {"timestamp": "2025-08-13T21:30:00Z"}
-            }))
-            
+            await websocket.send_text(
+                json.dumps(
+                    {"type": "heartbeat", "data": {"timestamp": "2025-08-13T21:30:00Z"}}
+                )
+            )
+
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
 
 def start_server():
     """Start the development server."""
+    # CRITICAL: Enforce port usage rules before binding
+    require_port(settings.port, "analytics-dashboard")
+
     uvicorn.run(
         "caelum_analytics.web.app:app",
         host=settings.host,
         port=settings.port,
         reload=settings.reload,
-        log_level=settings.log_level.lower()
+        log_level=settings.log_level.lower(),
     )
 
 

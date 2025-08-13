@@ -1,7 +1,7 @@
 """
 Caelum Analytics - Real-time Monitoring Dashboard
 
-A comprehensive Python-based monitoring, analytics, and visualization system 
+A comprehensive Python-based monitoring, analytics, and visualization system
 for the Caelum MCP Server ecosystem.
 """
 
