@@ -9,11 +9,13 @@ import uvicorn
 from typing import List
 import json
 import asyncio
+import uuid
 from datetime import datetime
 
 from ..config import settings
 from ..machine_registry import machine_registry
 from ..port_registry import port_registry, ServiceType
+from ..cluster_protocol import cluster_node, ClusterMessage, MessageType
 
 # Create FastAPI application
 app = FastAPI(
@@ -58,6 +60,31 @@ class ConnectionManager:
                 self.active_connections.remove(connection)
 
 manager = ConnectionManager()
+
+# Cluster communication server
+cluster_server = None
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Start the cluster communication server on app startup."""
+    global cluster_server
+    try:
+        # Start cluster communication server on port 8080
+        cluster_server = await cluster_node.start_server(host="0.0.0.0")
+        print(f"🌐 Cluster communication server started on port 8080")
+    except Exception as e:
+        print(f"⚠️ Failed to start cluster server: {e}")
+
+
+@app.on_event("shutdown") 
+async def shutdown_event():
+    """Clean shutdown of cluster communication."""
+    global cluster_server
+    if cluster_server:
+        cluster_server.close()
+        await cluster_server.wait_closed()
+        print("🌐 Cluster communication server stopped")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -114,7 +141,8 @@ async def dashboard():
             <button class="tab active" onclick="showTab('overview')">📊 Overview</button>
             <button class="tab" onclick="showTab('machines')">🖥️ Machines</button>
             <button class="tab" onclick="showTab('servers')">🔧 MCP Servers</button>
-            <button class="tab" onclick="showTab('network')">🌐 Network</button>
+            <button class="tab" onclick="showTab('cluster')">🌐 Cluster</button>
+            <button class="tab" onclick="showTab('network')">📡 Network</button>
         </div>
 
         <div id="overview" class="tab-content active">
@@ -203,14 +231,81 @@ async def dashboard():
             </div>
         </div>
 
+        <div id="cluster" class="tab-content">
+            <div class="grid">
+                <div class="card">
+                    <h3>🌐 Cluster Communication</h3>
+                    <div class="metric">
+                        <span class="metric-label">Cluster Server</span>
+                        <span class="metric-value status" id="cluster-server-status">Loading...</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Connected Machines</span>
+                        <span class="metric-value" id="connected-machines">0</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Discovered Machines</span>
+                        <span class="metric-value" id="discovered-machines">0</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Pending Tasks</span>
+                        <span class="metric-value" id="pending-tasks">0</span>
+                    </div>
+                    <button class="btn btn-success" onclick="discoverClusterMachines()">🔍 Discover Network</button>
+                    <button class="btn" onclick="testClusterCommunication()">📡 Test Communication</button>
+                </div>
+                
+                <div class="card">
+                    <h3>🔗 Machine Connections</h3>
+                    <div id="cluster-connections">No connections established</div>
+                    <div style="margin-top: 15px;">
+                        <input type="text" id="connect-host" placeholder="Machine IP address" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; margin-right: 10px;">
+                        <button class="btn" onclick="connectToMachine()">Connect</button>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <h3>📋 Distributed Tasks</h3>
+                    <div id="distributed-tasks">No active tasks</div>
+                    <div style="margin-top: 15px;">
+                        <select id="task-type" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; margin-right: 10px;">
+                            <option value="code_analysis">Code Analysis</option>
+                            <option value="integration_testing">Integration Testing</option>
+                            <option value="ai_inference">AI Inference</option>
+                            <option value="data_processing">Data Processing</option>
+                        </select>
+                        <button class="btn btn-success" onclick="distributeTask()">Distribute Task</button>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <h3>🏗️ Resource Reservations</h3>
+                    <div id="resource-reservations">No active reservations</div>
+                </div>
+            </div>
+        </div>
+
         <div id="network" class="tab-content">
             <div class="card">
-                <h3>🌐 Network Topology</h3>
-                <p>Network discovery and topology mapping will be implemented in Phase 1 Week 2.</p>
+                <h3>📡 Network Topology</h3>
+                <p><strong>Phase 1 Week 2:</strong> Cross-machine communication protocol implemented!</p>
                 <div id="network-topology">
-                    <p>🔍 Scanning for Caelum Analytics endpoints...</p>
-                    <p>📡 WebSocket cluster communication on port 8080</p>
-                    <p>🗄️ Redis work queue coordination on port 6379</p>
+                    <div class="metric">
+                        <span class="metric-label">🔧 WebSocket Cluster Communication</span>
+                        <span class="metric-value">Port 8080 • Ready</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">🗄️ Redis Work Queue</span>
+                        <span class="metric-value">Port 6379 • Coordination</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">📊 Analytics Dashboard</span>
+                        <span class="metric-value">Port 8090 • Monitoring</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">🔍 Service Discovery</span>
+                        <span class="metric-value">Auto-detection • Active</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -242,6 +337,8 @@ async def dashboard():
                     loadMachines();
                 } else if (tabName === 'servers') {
                     loadServers();
+                } else if (tabName === 'cluster') {
+                    loadClusterStatus();
                 }
             }
             
@@ -368,6 +465,158 @@ async def dashboard():
                 }
             }
             
+            async function loadClusterStatus() {
+                try {
+                    const response = await fetch('/api/v1/cluster/status');
+                    const data = await response.json();
+                    updateClusterDisplay(data);
+                    
+                    // Load tasks
+                    const tasksResponse = await fetch('/api/v1/cluster/tasks');
+                    const tasksData = await tasksResponse.json();
+                    updateTasksDisplay(tasksData);
+                } catch (error) {
+                    addLog(`❌ Failed to load cluster status: ${error.message}`);
+                }
+            }
+            
+            function updateClusterDisplay(data) {
+                document.getElementById('cluster-server-status').textContent = 
+                    data.cluster_server_running ? 'ONLINE' : 'OFFLINE';
+                document.getElementById('cluster-server-status').className = 
+                    'metric-value status ' + (data.cluster_server_running ? 'online' : 'offline');
+                
+                document.getElementById('connected-machines').textContent = data.connected_machines.length;
+                document.getElementById('discovered-machines').textContent = data.discovered_machines.length;
+                document.getElementById('pending-tasks').textContent = data.pending_tasks;
+                
+                // Update connections display
+                const connectionsDiv = document.getElementById('cluster-connections');
+                if (data.connected_machines.length > 0) {
+                    connectionsDiv.innerHTML = data.connected_machines.map(machine => 
+                        `<div class="metric"><span class="metric-label">${machine}</span><span class="status online">CONNECTED</span></div>`
+                    ).join('');
+                } else {
+                    connectionsDiv.innerHTML = 'No connections established';
+                }
+            }
+            
+            function updateTasksDisplay(data) {
+                const tasksDiv = document.getElementById('distributed-tasks');
+                const reservationsDiv = document.getElementById('resource-reservations');
+                
+                if (data.pending_tasks.length > 0) {
+                    tasksDiv.innerHTML = data.pending_tasks.map(task => 
+                        `<div class="metric">
+                            <span class="metric-label">${task.task_type}</span>
+                            <span class="metric-value">Priority ${task.priority}</span>
+                        </div>`
+                    ).join('');
+                } else {
+                    tasksDiv.innerHTML = 'No active tasks';
+                }
+                
+                if (data.resource_reservations.length > 0) {
+                    reservationsDiv.innerHTML = data.resource_reservations.map(res => 
+                        `<div class="metric">
+                            <span class="metric-label">CPU: ${res.cpu_cores || 0}, RAM: ${res.memory_gb || 0}GB</span>
+                            <span class="metric-value">${res.machine_id}</span>
+                        </div>`
+                    ).join('');
+                } else {
+                    reservationsDiv.innerHTML = 'No active reservations';
+                }
+            }
+            
+            async function discoverClusterMachines() {
+                try {
+                    addLog("🔍 Starting cluster network discovery...");
+                    const response = await fetch('/api/v1/cluster/discover', { method: 'POST' });
+                    const data = await response.json();
+                    addLog(`📡 Discovery broadcast sent to ${data.connected_machines} machines`);
+                    
+                    // Refresh cluster status after discovery
+                    setTimeout(loadClusterStatus, 2000);
+                } catch (error) {
+                    addLog(`❌ Failed to trigger discovery: ${error.message}`);
+                }
+            }
+            
+            async function connectToMachine() {
+                const host = document.getElementById('connect-host').value;
+                if (!host) {
+                    addLog("⚠️ Please enter a machine IP address");
+                    return;
+                }
+                
+                try {
+                    addLog(`🔗 Connecting to ${host}:8080...`);
+                    const response = await fetch('/api/v1/cluster/connect', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ host: host, port: 8080 })
+                    });
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        addLog(`✅ Connected to ${host}`);
+                        document.getElementById('connect-host').value = '';
+                        loadClusterStatus();
+                    } else {
+                        addLog(`❌ Failed to connect to ${host}`);
+                    }
+                } catch (error) {
+                    addLog(`❌ Connection error: ${error.message}`);
+                }
+            }
+            
+            async function testClusterCommunication() {
+                try {
+                    addLog("📡 Testing cluster communication...");
+                    const response = await fetch('/api/v1/cluster/broadcast', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            message_type: 'PING',
+                            payload: { test_message: 'Hello from Analytics Dashboard!' }
+                        })
+                    });
+                    const data = await response.json();
+                    addLog(`📡 Broadcast sent to ${data.recipients} machines`);
+                } catch (error) {
+                    addLog(`❌ Communication test failed: ${error.message}`);
+                }
+            }
+            
+            async function distributeTask() {
+                const taskType = document.getElementById('task-type').value;
+                
+                try {
+                    addLog(`📋 Distributing ${taskType} task...`);
+                    const response = await fetch('/api/v1/cluster/task/distribute', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            task_type: taskType,
+                            service_name: 'caelum-code-analysis',
+                            payload: { 
+                                test_task: true,
+                                description: `Distributed ${taskType} task from Analytics Dashboard`
+                            },
+                            priority: 7,
+                            estimated_duration: 120
+                        })
+                    });
+                    const data = await response.json();
+                    addLog(`✅ Task distributed to ${data.recipients} machines (ID: ${data.task_id.substring(0, 8)}...)`);
+                    
+                    // Refresh cluster status
+                    setTimeout(loadClusterStatus, 1000);
+                } catch (error) {
+                    addLog(`❌ Task distribution failed: ${error.message}`);
+                }
+            }
+            
             function discoverMachines() {
                 addLog("🔍 Starting machine discovery...");
                 loadMachines();
@@ -381,6 +630,7 @@ async def dashboard():
                 
                 // Auto-refresh every 30 seconds
                 setInterval(loadMachines, 30000);
+                setInterval(loadClusterStatus, 30000);
             };
         </script>
     </body>
@@ -512,6 +762,154 @@ async def get_distributed_port_map():
             "assigned_to_machines": len([a for a in port_registry.get_all_allocations().values() if a.machine_id]),
             "available_for_assignment": len([a for a in port_registry.get_all_allocations().values() if not a.machine_id])
         }
+    }
+
+
+@app.get("/api/v1/cluster/status")
+async def get_cluster_status():
+    """Get cluster communication status and connected machines."""
+    return {
+        "cluster_server_running": cluster_server is not None,
+        "local_machine_id": cluster_node.machine_id,
+        "connected_machines": list(cluster_node.connections.keys()),
+        "discovered_machines": list(cluster_node.discovered_machines.keys()),
+        "pending_tasks": len(cluster_node.pending_tasks),
+        "resource_reservations": len(cluster_node.resource_reservations),
+        "communication_port": 8080,
+        "message_handlers": len(cluster_node.message_handlers)
+    }
+
+
+@app.post("/api/v1/cluster/connect")
+async def connect_to_machine(request: dict):
+    """Connect to another machine in the cluster."""
+    host = request.get('host')
+    port = request.get('port', 8080)
+    
+    if not host:
+        return {"error": "Host is required"}
+    
+    success = await cluster_node.connect_to_machine(host, port)
+    return {
+        "success": success,
+        "message": f"{'Connected to' if success else 'Failed to connect to'} {host}:{port}"
+    }
+
+
+@app.post("/api/v1/cluster/discover")
+async def discover_network_machines():
+    """Trigger network discovery for Caelum machines."""
+    # Send discovery broadcast
+    message = ClusterMessage(
+        message_id=str(uuid.uuid4()),
+        message_type=MessageType.MACHINE_DISCOVER,
+        source_machine=cluster_node.machine_id or "unknown",
+        payload={"discovery_request": True}
+    )
+    
+    await cluster_node.broadcast_message(message)
+    
+    return {
+        "status": "discovery_initiated",
+        "message": "Network discovery broadcast sent",
+        "connected_machines": len(cluster_node.connections),
+        "discovered_machines": len(cluster_node.discovered_machines)
+    }
+
+
+@app.post("/api/v1/cluster/broadcast")
+async def broadcast_message(request: dict):
+    """Broadcast a custom message to all cluster machines."""
+    message_type = request.get('message_type', 'STATUS_BROADCAST')
+    payload = request.get('payload', {})
+    
+    try:
+        msg_type = MessageType(message_type)
+    except ValueError:
+        return {"error": f"Invalid message type: {message_type}"}
+    
+    message = ClusterMessage(
+        message_id=str(uuid.uuid4()),
+        message_type=msg_type,
+        source_machine=cluster_node.machine_id or "unknown",
+        payload=payload
+    )
+    
+    await cluster_node.broadcast_message(message)
+    
+    return {
+        "status": "message_broadcast",
+        "message_id": message.message_id,
+        "recipients": len(cluster_node.connections)
+    }
+
+
+@app.get("/api/v1/cluster/tasks")
+async def get_distributed_tasks():
+    """Get current distributed tasks and their status."""
+    return {
+        "pending_tasks": [
+            {
+                "task_id": task.task_id,
+                "task_type": task.task_type,
+                "service_name": task.service_name,
+                "source_machine": task.source_machine,
+                "assigned_machines": task.assigned_machines,
+                "priority": task.priority,
+                "estimated_duration": task.estimated_duration,
+                "created_at": task.created_at.isoformat()
+            }
+            for task in cluster_node.pending_tasks.values()
+        ],
+        "resource_reservations": [
+            {
+                "reservation_id": res.reservation_id,
+                "machine_id": res.machine_id,
+                "cpu_cores": res.cpu_cores,
+                "memory_gb": res.memory_gb,
+                "gpu_count": res.gpu_count,
+                "duration_seconds": res.duration_seconds,
+                "task_id": res.task_id,
+                "reserved_at": res.reserved_at.isoformat()
+            }
+            for res in cluster_node.resource_reservations.values()
+        ]
+    }
+
+
+@app.post("/api/v1/cluster/task/distribute")
+async def distribute_task(request: dict):
+    """Distribute a task across the cluster."""
+    from ..cluster_protocol import TaskDistribution
+    
+    task_data = {
+        'task_id': str(uuid.uuid4()),
+        'task_type': request.get('task_type', 'unknown'),
+        'service_name': request.get('service_name', 'caelum-code-analysis'),
+        'source_machine': cluster_node.machine_id or "unknown",
+        'assigned_machines': request.get('assigned_machines', []),
+        'payload': request.get('payload', {}),
+        'priority': request.get('priority', 5),
+        'estimated_duration': request.get('estimated_duration', 60)
+    }
+    
+    task = TaskDistribution(**task_data)
+    cluster_node.pending_tasks[task.task_id] = task
+    
+    # Broadcast task distribution message
+    message = ClusterMessage(
+        message_id=str(uuid.uuid4()),
+        message_type=MessageType.TASK_DISTRIBUTE,
+        source_machine=cluster_node.machine_id or "unknown",
+        payload={'task': task_data}
+    )
+    
+    await cluster_node.broadcast_message(message)
+    
+    return {
+        "status": "task_distributed",
+        "task_id": task.task_id,
+        "recipients": len(cluster_node.connections)
     }
 
 

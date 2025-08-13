@@ -32,6 +32,7 @@ dependencies = [
     
     # Real-time & WebSocket
     "python-socketio[asyncio]>=5.10.0",
+    "websockets>=12.0.0",
     
     # System Monitoring
     "psutil>=5.9.0",
