@@ -220,11 +220,10 @@ uv build
 
 # Deploy with Docker
 docker build -t caelum-analytics .
-docker run -d -p 8080:8090 --name caelum-analytics caelum-analytics
+docker run -d -p 8090:8090 --name caelum-analytics caelum-analytics
 
-# Note: The application runs on port 8090 internally to avoid conflict with
-# the cluster communication server on port 8080. The Docker command maps
-# host port 8080 to container port 8090 for convenience.
+# Note: The application runs on port 8090 to avoid conflict with
+# the cluster communication server on port 8080.
 
 # Or with systemd service
 sudo cp scripts/caelum-analytics.service /etc/systemd/system/

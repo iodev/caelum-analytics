@@ -20,7 +20,7 @@ Caelum Analytics is a real-time monitoring and analytics dashboard for the Caelu
 #### Docker (Recommended)
 ```bash
 docker build -t caelum-analytics .
-docker run -d -p 8080:8090 --name caelum-analytics caelum-analytics
+docker run -d -p 8090:8090 --name caelum-analytics caelum-analytics
 ```
 
 #### Local Development
@@ -63,7 +63,7 @@ uv run mypy src/
 If port 8080 is in use, the cluster communication server will conflict. Ensure:
 1. Application runs on port 8090
 2. Cluster communication uses port 8080
-3. Docker maps appropriately: `-p 8080:8090`
+3. Docker maps consistently: `-p 8090:8090`
 
 ### WebSocket Connection Issues
 - Check CORS settings in `web/app.py`
