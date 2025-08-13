@@ -27,9 +27,12 @@ class PortAllocation:
     purpose: str
     protocol: str = "TCP"
     status: str = "active"  # active, reserved, deprecated
+    machine_id: Optional[str] = None  # Which machine is running this service
+    ip_address: Optional[str] = None  # IP address where service is running
     
     def __str__(self) -> str:
-        return f"{self.port}: {self.service_name} ({self.service_type.value}) - {self.purpose}"
+        location = f" on {self.machine_id}({self.ip_address})" if self.machine_id else ""
+        return f"{self.port}: {self.service_name} ({self.service_type.value}) - {self.purpose}{location}"
 
 
 class CaelumPortRegistry:
@@ -140,6 +143,54 @@ class CaelumPortRegistry:
                 lines.append(f"  {alloc}")
         
         return "\n".join(lines)
+    
+    def assign_service_to_machine(self, port: int, machine_id: str, ip_address: str) -> bool:
+        """Assign a service port to a specific machine."""
+        if port in self._allocations:
+            self._allocations[port].machine_id = machine_id
+            self._allocations[port].ip_address = ip_address
+            return True
+        return False
+    
+    def get_services_on_machine(self, machine_id: str) -> List[PortAllocation]:
+        """Get all services running on a specific machine."""
+        return [alloc for alloc in self._allocations.values() if alloc.machine_id == machine_id]
+    
+    def get_service_location(self, service_name: str) -> Optional[PortAllocation]:
+        """Find where a specific service is running."""
+        for alloc in self._allocations.values():
+            if alloc.service_name == service_name:
+                return alloc
+        return None
+    
+    def update_from_machine_registry(self, machine_registry) -> None:
+        """Update port assignments based on machine registry information."""
+        # This will be called to sync with the machine registry
+        for machine in machine_registry.machines.values():
+            for service in machine.running_services:
+                self.assign_service_to_machine(
+                    service['port'], 
+                    machine.machine_id, 
+                    machine.primary_ip
+                )
+    
+    def get_distributed_service_map(self) -> Dict[str, List[PortAllocation]]:
+        """Get a map of services organized by machine for distributed coordination."""
+        machine_services = {}
+        for alloc in self._allocations.values():
+            if alloc.machine_id:
+                if alloc.machine_id not in machine_services:
+                    machine_services[alloc.machine_id] = []
+                machine_services[alloc.machine_id].append(alloc)
+        return machine_services
+    
+    def find_service_endpoints(self, service_type: ServiceType) -> List[str]:
+        """Find all endpoints for a specific type of service across the network."""
+        endpoints = []
+        for alloc in self._allocations.values():
+            if alloc.service_type == service_type and alloc.ip_address:
+                endpoints.append(f"{alloc.ip_address}:{alloc.port}")
+        return endpoints
 
 
 # Global registry instance
