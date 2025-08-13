@@ -220,6 +220,12 @@ uv build
 
 # Deploy with Docker
 docker build -t caelum-analytics .
+
+# Stop and remove existing container if it exists
+docker stop caelum-analytics 2>/dev/null || true
+docker rm caelum-analytics 2>/dev/null || true
+
+# Run the container
 docker run -d -p 8090:8090 --name caelum-analytics caelum-analytics
 
 # Note: The application runs on port 8090 to avoid conflict with
