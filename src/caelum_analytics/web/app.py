@@ -18,7 +18,7 @@ from ..port_registry import port_registry, ServiceType
 from ..cluster_protocol import cluster_node, ClusterMessage, MessageType, shutdown_cluster_node, ClusterNode
 from ..distributed_code_analysis import distributed_analyzer, AnalysisType
 from ..port_enforcer import PortEnforcer, require_port
-from ..udp_beacon import get_udp_discovered_machines, trigger_udp_discovery
+# UDP beacon discovery removed - should use cluster-communication-server MCP tools instead
 from ..claude_sync import claude_sync
 
 # Create FastAPI application
@@ -486,7 +486,7 @@ async def dashboard():
             function addLog(message) {
                 const log = document.getElementById('live-log');
                 const time = new Date().toLocaleTimeString();
-                log.innerHTML += `[${time}] ${message}\\n`;
+                log.innerHTML += `[${time}] ${message}<br>`;
                 log.scrollTop = log.scrollHeight;
             }
             
@@ -1215,8 +1215,9 @@ async def discover_network_machines():
 
     await cluster_node.broadcast_message(message)
 
-    # Trigger UDP beacon discovery
-    udp_discovered = trigger_udp_discovery()
+    # TODO: Use cluster-communication-server MCP tools instead of direct UDP discovery
+    # Should call MCP tool: list_clusters from cluster-communication-server
+    udp_discovered = []  # Placeholder - implement MCP API call
     
     # Also do traditional network scanning
     discovered_endpoints = await machine_registry.discover_network_machines()
@@ -1387,12 +1388,20 @@ async def distribute_task(request: dict):
 
 @app.get("/api/v1/udp/discovered")
 async def get_udp_discovered_machines_endpoint():
-    """Get machines discovered via UDP beacons."""
-    discovered = get_udp_discovered_machines()
+    """Get machines discovered via cluster communication server.
+    
+    TODO: This should call the cluster-communication-server MCP tools:
+    - list_clusters
+    - get_cluster_health
+    Instead of direct UDP discovery in the web interface.
+    """
+    # Placeholder - should implement MCP API call to cluster-communication-server
+    discovered = []
     return {
         "udp_discovered_machines": discovered,
         "total_discovered": len(discovered),
-        "discovery_method": "UDP_BEACON",
+        "discovery_method": "MCP_CLUSTER_COMMUNICATION_SERVER",
+        "note": "Should integrate with cluster-communication-server MCP tools"
     }
 
 
