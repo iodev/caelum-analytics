@@ -256,18 +256,30 @@ class MachineRegistry:
         # Filter out localhost
         external_ips = [ip for ip in ip_addresses if not ip.startswith("127.")]
 
-        # Prefer private network IPs
-        private_ips = [
-            ip
-            for ip in external_ips
-            if ip.startswith("192.168.")
-            or ip.startswith("10.")
-            or ip.startswith("172.")
-        ]
+        # Prioritize network selection for real hardware-to-hardware discovery
+        # 1. VPN networks (10.x.x.x range) - for real machine discovery
+        # 2. Common private networks (192.168.x.x, 172.16-31.x.x)  
+        # 3. WSL/Docker internal networks (172.17+.x.x) - lowest priority
+        
+        # VPN networks (10.x.x.x range) - highest priority for hardware discovery
+        vpn_ips = [ip for ip in external_ips if ip.startswith("10.")]
+        if vpn_ips:
+            return vpn_ips[0]
+        
+        # Standard private networks
+        standard_private_ips = [ip for ip in external_ips if ip.startswith("192.168.")]
+        if standard_private_ips:
+            return standard_private_ips[0]
+            
+        # Private 172.x networks, but prefer lower ranges (172.16-31 over 172.17+)
+        private_172_ips = [ip for ip in external_ips if ip.startswith("172.")]
+        if private_172_ips:
+            # Sort to prefer 172.16-31.x.x (standard private) over 172.17+.x.x (Docker/WSL)
+            private_172_ips.sort(key=lambda ip: int(ip.split('.')[1]))
+            return private_172_ips[0]
 
-        if private_ips:
-            return private_ips[0]
-        elif external_ips:
+        # Fallback to any remaining external IP
+        if external_ips:
             return external_ips[0]
         else:
             return "127.0.0.1"
