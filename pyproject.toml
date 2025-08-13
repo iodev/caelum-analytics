@@ -1,0 +1,133 @@
+[project]
+name = "caelum-analytics"
+version = "0.1.0"
+description = "Real-time monitoring, analytics, and visualization dashboard for Caelum MCP Server System"
+authors = [
+    {name = "Caelum Team", email = "team@caelum.dev"}
+]
+dependencies = [
+    # Web Framework
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "websockets>=12.0.0",
+    
+    # Data & Analytics
+    "pandas>=2.1.0",
+    "numpy>=1.24.0",
+    "influxdb-client>=1.40.0",
+    "redis>=5.0.0",
+    "psycopg2-binary>=2.9.7",
+    
+    # Visualization & Charts
+    "plotly>=5.17.0",
+    "streamlit>=1.28.0",
+    "matplotlib>=3.8.0",
+    "seaborn>=0.13.0",
+    
+    # HTTP Client & API Integration  
+    "httpx>=0.25.0",
+    "aiohttp>=3.9.0",
+    "pydantic>=2.5.0",
+    
+    # Real-time & WebSocket
+    "socketio>=5.10.0",
+    "python-socketio[asyncio]>=5.10.0",
+    
+    # System Monitoring
+    "psutil>=5.9.0",
+    "docker>=6.1.0",
+    
+    # Configuration & Environment
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0.1",
+    "click>=8.1.0",
+    
+    # Logging & Monitoring
+    "structlog>=23.2.0",
+    "rich>=13.7.0",
+    "prometheus-client>=0.19.0",
+    
+    # Development Tools
+    "black>=23.11.0",
+    "isort>=5.12.0",
+    "mypy>=1.7.0",
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.11.0",
+    "isort>=5.12.0",
+    "mypy>=1.7.0",
+    "pre-commit>=3.5.0",
+]
+
+[project.scripts]
+caelum-analytics = "caelum_analytics.cli:main"
+caelum-dashboard = "caelum_analytics.web.app:start_server"
+caelum-collector = "caelum_analytics.collectors.main:run_collectors"
+
+[project.urls]
+Homepage = "https://github.com/caelum-team/caelum-analytics"
+Repository = "https://github.com/caelum-team/caelum-analytics.git"
+Documentation = "https://github.com/caelum-team/caelum-analytics/wiki"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.11.0",
+    "isort>=5.12.0",
+    "mypy>=1.7.0",
+    "pre-commit>=3.5.0",
+    "jupyterlab>=4.0.0",
+]
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+known_first_party = ["caelum_analytics"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+strict_optional = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
