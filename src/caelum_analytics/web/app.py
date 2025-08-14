@@ -631,18 +631,22 @@ async def dashboard():
                 
                 // Update connections display
                 const connectionsDiv = document.getElementById('cluster-connections');
-                if (data.connected_machines.length > 0) {
-                    connectionsDiv.innerHTML = data.connected_machines.map(machine => 
-                        `<div class="metric"><span class="metric-label">${machine}</span><span class="status online">CONNECTED</span></div>`
-                    ).join('');
-                } else {
-                    connectionsDiv.innerHTML = 'No connections established';
+                if (connectionsDiv) {
+                    if (data.connected_machines && data.connected_machines.length > 0) {
+                        connectionsDiv.innerHTML = data.connected_machines.map(machine => 
+                            `<div class="metric"><span class="metric-label">${machine}</span><span class="status online">CONNECTED</span></div>`
+                        ).join('');
+                    } else {
+                        connectionsDiv.innerHTML = 'No connections established';
+                    }
                 }
             }
             
             function updateTasksDisplay(data) {
                 const tasksDiv = document.getElementById('distributed-tasks');
                 const reservationsDiv = document.getElementById('resource-reservations');
+                
+                if (!tasksDiv || !reservationsDiv) return;
                 
                 if (data.pending_tasks.length > 0) {
                     tasksDiv.innerHTML = data.pending_tasks.map(task => 
@@ -683,7 +687,8 @@ async def dashboard():
                     }
                     
                     // Update last discovery time
-                    document.getElementById('last-discovery').textContent = new Date().toLocaleTimeString();
+                    const lastDiscoveryEl = document.getElementById('last-discovery');
+                    if (lastDiscoveryEl) lastDiscoveryEl.textContent = new Date().toLocaleTimeString();
                     
                     // Refresh cluster status and info after discovery
                     await loadClusterStatus();
@@ -734,14 +739,24 @@ async def dashboard():
             function updateClusterInfo(data) {
                 // Update local cluster info
                 const localCluster = data.local_cluster;
-                document.getElementById('local-cluster-name').textContent = localCluster.cluster_name;
-                document.getElementById('local-cluster-id').textContent = localCluster.cluster_id.slice(0, 8) + '...';
-                document.getElementById('local-cluster-machines').textContent = localCluster.total_machines;
+                const localClusterNameEl = document.getElementById('local-cluster-name');
+                if (localClusterNameEl) localClusterNameEl.textContent = localCluster.cluster_name;
+                
+                const localClusterIdEl = document.getElementById('local-cluster-id');
+                if (localClusterIdEl) localClusterIdEl.textContent = localCluster.cluster_id.slice(0, 8) + '...';
+                
+                const localClusterMachinesEl = document.getElementById('local-cluster-machines');
+                if (localClusterMachinesEl) localClusterMachinesEl.textContent = localCluster.total_machines;
                 
                 // Update network summary
-                document.getElementById('total-clusters').textContent = data.network_summary.total_clusters;
-                document.getElementById('total-network-machines').textContent = data.network_summary.total_machines;
-                document.getElementById('active-connections').textContent = data.network_summary.cluster_connections;
+                const totalClustersEl = document.getElementById('total-clusters');
+                if (totalClustersEl) totalClustersEl.textContent = data.network_summary.total_clusters;
+                
+                const totalNetworkMachinesEl = document.getElementById('total-network-machines');
+                if (totalNetworkMachinesEl) totalNetworkMachinesEl.textContent = data.network_summary.total_machines;
+                
+                const activeConnectionsEl = document.getElementById('active-connections');
+                if (activeConnectionsEl) activeConnectionsEl.textContent = data.network_summary.cluster_connections;
                 
                 // Update discovered clusters
                 const discoveredClustersDiv = document.getElementById('discovered-clusters-list');
@@ -842,7 +857,8 @@ async def dashboard():
                     const response = await fetch('/api/v1/analysis/sessions');
                     const data = await response.json();
                     
-                    document.getElementById('active-analysis-sessions').textContent = data.active_sessions.length;
+                    const activeAnalysisSessionsEl = document.getElementById('active-analysis-sessions');
+                    if (activeAnalysisSessionsEl) activeAnalysisSessionsEl.textContent = data.active_sessions.length;
                     
                     const sessionsDiv = document.getElementById('analysis-sessions-list');
                     if (data.active_sessions.length > 0) {
