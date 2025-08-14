@@ -560,16 +560,28 @@ async def dashboard():
             
             function updateOverviewMetrics(data) {
                 if (data.total_resources) {
-                    document.getElementById('total-machines').textContent = data.total_machines;
-                    document.getElementById('online-machines').textContent = data.online_machines;
-                    document.getElementById('total-cpu').textContent = data.total_resources.cpu_cores;
-                    document.getElementById('total-memory').textContent = data.total_resources.memory_total_gb.toFixed(1) + ' GB';
-                    document.getElementById('available-memory').textContent = data.total_resources.memory_available_gb.toFixed(1) + ' GB';
-                    document.getElementById('gpu-count').textContent = data.total_resources.gpu_count || 0;
+                    const totalMachinesEl = document.getElementById('total-machines');
+                    if (totalMachinesEl) totalMachinesEl.textContent = data.total_machines;
+                    
+                    const onlineMachinesEl = document.getElementById('online-machines');
+                    if (onlineMachinesEl) onlineMachinesEl.textContent = data.online_machines;
+                    
+                    const totalCpuEl = document.getElementById('total-cpu');
+                    if (totalCpuEl) totalCpuEl.textContent = data.total_resources.cpu_cores;
+                    
+                    const totalMemoryEl = document.getElementById('total-memory');
+                    if (totalMemoryEl) totalMemoryEl.textContent = data.total_resources.memory_total_gb.toFixed(1) + ' GB';
+                    
+                    const availableMemoryEl = document.getElementById('available-memory');
+                    if (availableMemoryEl) availableMemoryEl.textContent = data.total_resources.memory_available_gb.toFixed(1) + ' GB';
+                    
+                    const gpuCountEl = document.getElementById('gpu-count');
+                    if (gpuCountEl) gpuCountEl.textContent = data.total_resources.gpu_count || 0;
                     
                     // Update active services count
                     const totalServices = data.machines.reduce((sum, machine) => sum + machine.running_services.length, 0);
-                    document.getElementById('active-services').textContent = totalServices;
+                    const activeServicesEl = document.getElementById('active-services');
+                    if (activeServicesEl) activeServicesEl.textContent = totalServices;
                 }
             }
             
@@ -598,14 +610,24 @@ async def dashboard():
             }
             
             function updateClusterDisplay(data) {
-                document.getElementById('cluster-server-status').textContent = 
-                    data.cluster_server_running ? 'ONLINE' : 'OFFLINE';
-                document.getElementById('cluster-server-status').className = 
-                    'metric-value status ' + (data.cluster_server_running ? 'online' : 'offline');
+                // Update cluster health status
+                const healthElement = document.getElementById('cluster-health');
+                if (healthElement) {
+                    healthElement.textContent = data.cluster_server_running ? 'ONLINE' : 'OFFLINE';
+                    healthElement.className = 'metric-value status ' + (data.cluster_server_running ? 'online' : 'offline');
+                }
                 
-                document.getElementById('connected-machines').textContent = data.connected_machines.length;
-                document.getElementById('discovered-machines').textContent = data.discovered_machines.length;
-                document.getElementById('pending-tasks').textContent = data.pending_tasks;
+                // Update machine counts (use existing elements)
+                const totalMachinesElement = document.getElementById('total-machines');
+                if (totalMachinesElement && data.connected_machines) {
+                    totalMachinesElement.textContent = data.connected_machines.length;
+                }
+                
+                // Update task queue (use existing element)
+                const taskQueueElement = document.getElementById('task-queue');
+                if (taskQueueElement && data.pending_tasks !== undefined) {
+                    taskQueueElement.textContent = `${data.pending_tasks} pending`;
+                }
                 
                 // Update connections display
                 const connectionsDiv = document.getElementById('cluster-connections');
