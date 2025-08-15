@@ -121,7 +121,10 @@ async def dashboard():
             .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); border: 1px solid #e1e8ed; }
             .card h3 { margin-top: 0; color: #2c3e50; font-size: 1.3em; display: flex; align-items: center; gap: 10px; }
             .status { display: inline-block; padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; }
+            .status.available { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
             .status.online { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+            .status.error { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+            .status.unavailable { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
             .status.offline { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
             .status.busy { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
             .metric { display: flex; justify-content: space-between; margin: 12px 0; padding: 8px 0; border-bottom: 1px solid #f1f3f4; }
@@ -243,6 +246,10 @@ async def dashboard():
         <div id="servers" class="tab-content">
             <div class="card">
                 <h3>🔧 MCP Server Status</h3>
+                <div class="metric" id="server-health-summary" style="background: #f8f9fa; padding: 10px; border-radius: 6px; margin-bottom: 15px;">
+                    <span class="metric-label">Claude MCP Access</span>
+                    <span class="metric-value" id="server-health-count">Loading...</span>
+                </div>
                 <div id="server-list">Loading MCP servers...</div>
             </div>
         </div>
@@ -251,6 +258,10 @@ async def dashboard():
             <div class="grid">
                 <div class="card">
                     <h3>🏠 Local Cluster Identity</h3>
+                    <p style="font-size: 0.9em; color: #666; margin: 0 0 15px 0;">
+                        A <strong>cluster</strong> is a group of machines working together. 
+                        Each <strong>machine</strong> is an individual host/computer in the network.
+                    </p>
                     <div class="metric">
                         <span class="metric-label">Cluster Name</span>
                         <span class="metric-value" id="local-cluster-name">Loading...</span>
@@ -264,7 +275,7 @@ async def dashboard():
                         <span class="metric-value status online">Coordinator</span>
                     </div>
                     <div class="metric">
-                        <span class="metric-label">Machines in Cluster</span>
+                        <span class="metric-label">Machines in This Cluster</span>
                         <span class="metric-value" id="local-cluster-machines">1</span>
                     </div>
                 </div>
@@ -276,7 +287,7 @@ async def dashboard():
                         <span class="metric-value" id="total-clusters">1</span>
                     </div>
                     <div class="metric">
-                        <span class="metric-label">Network Machines</span>
+                        <span class="metric-label">Total Machines (All Clusters)</span>
                         <span class="metric-value" id="total-network-machines">1</span>
                     </div>
                     <div class="metric">
@@ -548,6 +559,8 @@ async def dashboard():
             
             function updateServerDisplay(data) {
                 const container = document.getElementById('server-list');
+                const healthCount = document.getElementById('server-health-count');
+                
                 if (data.servers) {
                     container.innerHTML = data.servers.map(server => `
                         <div class="metric">
@@ -555,6 +568,23 @@ async def dashboard():
                             <span class="status ${server.status}">${server.status.toUpperCase()}</span>
                         </div>
                     `).join('');
+                }
+                
+                if (data.summary && healthCount) {
+                    const { claude_has_access, available, error, unavailable } = data.summary;
+                    healthCount.textContent = claude_has_access;
+                    
+                    // Update color based on availability
+                    const summaryDiv = document.getElementById('server-health-summary');
+                    if (summaryDiv) {
+                        if (available > error + unavailable) {
+                            summaryDiv.style.background = '#d4edda';  // More available than problems
+                        } else if (available > 0) {
+                            summaryDiv.style.background = '#fff3cd';  // Some available
+                        } else {
+                            summaryDiv.style.background = '#f8d7da';  // None available
+                        }
+                    }
                 }
             }
             
@@ -1009,51 +1039,79 @@ async def dashboard():
 
 @app.get("/api/v1/servers")
 async def get_servers():
-    """Get list of all MCP servers and their status."""
-    servers = settings.get_mcp_servers_list()
+    """Get list of Caelum MCP servers and their availability in Claude."""
+    import json
+    import os
+    
+    # Read actual MCP configuration from Claude Desktop
+    mcp_config = {}
+    config_path = settings.mcp_servers_config_path
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r') as f:
+                config_data = json.load(f)
+                mcp_config = config_data.get('mcpServers', {})
+        except Exception as e:
+            print(f"Error reading MCP config: {e}")
+    
+    # Filter for only Caelum servers (those with "caelum-" prefix)
+    caelum_servers_in_config = {k: v for k, v in mcp_config.items() if k.startswith('caelum-')}
+    
     server_statuses = []
+    
+    # List of known Caelum servers from settings
+    expected_caelum_servers = settings.get_mcp_servers_list()
+    
+    # Check status of expected Caelum servers
+    for server_name in expected_caelum_servers:
+        if server_name in caelum_servers_in_config:
+            # Server is configured in Claude
+            server_config = caelum_servers_in_config[server_name]
+            
+            # Check if script exists (if it has args)
+            status = "available"
+            info = "ready"
+            
+            if 'args' in server_config and server_config['args']:
+                script_path = server_config['args'][0] if isinstance(server_config['args'], list) else server_config['args']
+                if not os.path.exists(script_path):
+                    status = "error"
+                    info = "script missing"
+        else:
+            status = "unavailable"
+            info = "not in Claude config"
 
-    for server in servers:
-        # Check if server is actually running
-        from ..port_registry import port_registry
+        server_statuses.append({
+            "name": server_name,
+            "status": status,
+            "response_time": info,
+            "port": "MCP",
+            "last_check": datetime.now(timezone.utc).isoformat(),
+        })
 
-        allocation = port_registry.get_service_location(server)
-        is_online = False
-        response_time = "timeout"
-
-        if allocation:
-            import socket
-            import time
-
-            try:
-                start_time = time.time()
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                    sock.settimeout(2)
-                    result = sock.connect_ex(("localhost", allocation.port))
-                    is_online = result == 0
-                    if is_online:
-                        response_time = f"{int((time.time() - start_time) * 1000)}ms"
-            except Exception:
-                is_online = False
-
-        server_statuses.append(
-            {
-                "name": server,
-                "status": "online" if is_online else "offline",
-                "response_time": response_time,
-                "port": allocation.port if allocation else "unknown",
+    # Add any additional Caelum servers found in config that we don't know about
+    for config_name in caelum_servers_in_config.keys():
+        if config_name not in expected_caelum_servers:
+            server_statuses.append({
+                "name": config_name,
+                "status": "available",
+                "response_time": "additional Caelum server",
+                "port": "MCP",
                 "last_check": datetime.now(timezone.utc).isoformat(),
-            }
-        )
+            })
 
-    online_count = sum(1 for s in server_statuses if s["status"] == "online")
+    available_count = sum(1 for s in server_statuses if s["status"] == "available")
+    error_count = sum(1 for s in server_statuses if s["status"] == "error")
+    unavailable_count = sum(1 for s in server_statuses if s["status"] == "unavailable")
 
     return {
         "servers": server_statuses,
         "summary": {
-            "total": len(servers),
-            "online": online_count,
-            "offline": len(servers) - online_count,
+            "total": len(server_statuses),
+            "available": available_count,
+            "error": error_count,
+            "unavailable": unavailable_count,
+            "claude_has_access": f"{available_count} Caelum MCP servers"
         },
     }
 

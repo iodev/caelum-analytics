@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     caelum_base_url: str = Field(default="http://localhost:3000", env="CAELUM_BASE_URL")
     caelum_api_key: Optional[str] = Field(default=None, env="CAELUM_API_KEY")
     mcp_servers_config_path: str = Field(
-        default="/home/rford/.claude/claude_desktop_config.json",
+        default="/root/.claude/claude_desktop_config.json",
         env="MCP_SERVERS_CONFIG_PATH",
     )
 

@@ -62,14 +62,15 @@ uv run caelum-dashboard
 uv run caelum-collector
 
 # Development mode with hot reload
-uv run uvicorn caelum_analytics.web.app:app --reload --host 0.0.0.0 --port 8080
+uv run uvicorn caelum_analytics.web.app:app --reload --host 0.0.0.0 --port 8090
 ```
 
 ## 📊 Features
 
 ### Real-time MCP Server Monitoring
 
-- ✅ Health status for all 20+ MCP servers
+- ✅ Health status for all 20+ MCP servers with automatic port checking (8100-8119)
+- ✅ Connection health percentage display (e.g., "15/20 servers online - 75%")
 - ✅ Connection status, response times, error rates
 - ✅ Resource usage (CPU, memory, disk, network)
 - ✅ Tool usage statistics and patterns
@@ -106,8 +107,9 @@ uv run uvicorn caelum_analytics.web.app:app --reload --host 0.0.0.0 --port 8080
 ```bash
 # Core Settings
 CAELUM_ANALYTICS_HOST=0.0.0.0
-CAELUM_ANALYTICS_PORT=8080
+CAELUM_ANALYTICS_PORT=8090  # Changed from 8080 to avoid conflicts
 DEBUG=false
+CLUSTER_COMMUNICATION_PORT=8081  # WebSocket cluster communication
 
 # Caelum Integration
 CAELUM_BASE_URL=http://localhost:3000
@@ -168,22 +170,48 @@ caelum-analytics/
 └── scripts/                    # Utility scripts
 ```
 
+## 🌐 Clusters vs Machines
+
+### Understanding the Architecture
+
+- **Machine**: An individual host/computer in the network. Each machine has its own resources (CPU, memory, etc.) and can run multiple MCP servers.
+- **Cluster**: A logical group of machines working together. Machines in the same cluster share a cluster ID and can coordinate tasks.
+
+### Current Implementation
+
+- Each machine initially forms its own cluster (1:1 relationship)
+- Machines can join existing clusters through network discovery
+- Clusters enable distributed task execution and resource sharing
+- The dashboard shows both cluster-level and machine-level metrics
+
 ## 🔗 MCP Server Integration
 
 ### Supported Caelum Servers
 
-The dashboard monitors all 20+ MCP servers:
+The dashboard monitors all 20+ MCP servers with automatic port checking:
 
-- `analytics-metrics-server` - Primary metrics source
-- `api-gateway-server` - API routing and auth
-- `business-intelligence-aggregation-server` - BI insights
-- `cluster-communication-server` - Cluster status
-- `device-orchestration-server` - Device management
-- `ollama-pool-integration-server` - LLM integration
-- `project-intelligence-server` - Code analysis
-- `user-profile-server` - User management
-- `workflow-orchestration-server` - Workflow tracking
-- And 11+ additional specialized servers...
+| Server Name | Default Port | Purpose |
+|------------|--------------|---------|
+| `caelum-analytics-metrics` | 8100 | Primary metrics source |
+| `caelum-api-gateway` | 8101 | API routing and auth |
+| `caelum-business-intelligence` | 8102 | BI insights |
+| `caelum-cluster-communication` | 8103 | Cluster status |
+| `caelum-code-analysis` | 8104 | Code analysis |
+| `caelum-cross-device-notifications` | 8105 | Notifications |
+| `caelum-deployment-infrastructure` | 8106 | Deployment |
+| `caelum-development-session` | 8107 | Dev sessions |
+| `caelum-device-orchestration` | 8108 | Device management |
+| `caelum-integration-testing` | 8109 | Testing |
+| `caelum-intelligence-hub` | 8110 | AI hub |
+| `caelum-knowledge-management` | 8111 | Knowledge base |
+| `caelum-ollama-pool` | 8112 | LLM integration |
+| `caelum-opportunity-discovery` | 8113 | Opportunities |
+| `caelum-performance-optimization` | 8114 | Performance |
+| `caelum-project-intelligence` | 8115 | Project analysis |
+| `caelum-security-compliance` | 8116 | Security |
+| `caelum-user-profile` | 8117 | User management |
+| `caelum-vector-database` | 8118 | Vector DB |
+| `caelum-workflow-automation` | 8119 | Workflow tracking |
 
 ### Data Collection Methods
 
