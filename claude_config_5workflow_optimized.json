@@ -1,0 +1,70 @@
+{
+  "mcpServers": {
+    "caelum-development-workflow": {
+      "command": "python",
+      "args": ["-m", "caelum_analytics.workflow_servers.development.server"],
+      "env": {
+        "CAELUM_ENV_FILE": "/home/rford/.caelum/.env"
+      },
+      "timeout": 60000,
+      "description": "Complete development lifecycle management - code analysis, project intelligence, session tracking"
+    },
+    "caelum-business-workflow": {
+      "command": "python",
+      "args": ["-m", "caelum_analytics.workflow_servers.business.server"],
+      "env": {
+        "CAELUM_ENV_FILE": "/home/rford/.caelum/.env"
+      },
+      "timeout": 60000,
+      "description": "Business intelligence and market research - market analysis, opportunity discovery, user profiles"
+    },
+    "caelum-infrastructure-workflow": {
+      "command": "python",
+      "args": ["-m", "caelum_analytics.workflow_servers.infrastructure.server"],
+      "env": {
+        "CAELUM_ENV_FILE": "/home/rford/.caelum/.env"
+      },
+      "timeout": 60000,
+      "description": "Infrastructure and deployment management - device orchestration, cluster communication, workflows"
+    },
+    "caelum-communication-workflow": {
+      "command": "python",
+      "args": ["-m", "caelum_analytics.workflow_servers.communication.server"],
+      "env": {
+        "CAELUM_ENV_FILE": "/home/rford/.caelum/.env"
+      },
+      "timeout": 60000,
+      "description": "Communication and knowledge management - notifications, intelligence hub, content management"
+    },
+    "caelum-security-workflow": {
+      "command": "python",
+      "args": ["-m", "caelum_analytics.workflow_servers.security.server"],
+      "env": {
+        "CAELUM_ENV_FILE": "/home/rford/.caelum/.env"
+      },
+      "timeout": 60000,
+      "description": "Security, compliance, and optimization - vulnerability scanning, compliance checking, access control"
+    },
+    "caelum-ollama-pool": {
+      "command": "node",
+      "args": ["/mnt/d/swdatasci/caelum/ollama-pool-integration-server/build/index.js"],
+      "env": {
+        "CAELUM_ENV_FILE": "/home/rford/.caelum/.env",
+        "OLLAMA_POOL_ENDPOINT": "http://10.32.3.27:11444",
+        "OLLAMA_FALLBACK_ENDPOINT": "http://10.32.3.27:11434"
+      },
+      "timeout": 60000,
+      "description": "Tier1 LLM integration with Ollama LAN Pool for cost optimization"
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/mnt/d/swdatasci/caelum", "/home/rford"],
+      "description": "Filesystem access for Caelum and user directories"
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "description": "Sequential thinking and problem-solving tool"
+    }
+  }
+}
