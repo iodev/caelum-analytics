@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "caelum-development-workflow": {
-      "command": "python",
+      "command": "python3",
       "args": ["-m", "caelum_analytics.workflow_servers.development.server"],
       "env": {
         "CAELUM_ENV_FILE": "/home/rford/.caelum/.env"
@@ -10,7 +10,7 @@
       "description": "Complete development lifecycle management - code analysis, project intelligence, session tracking"
     },
     "caelum-business-workflow": {
-      "command": "python",
+      "command": "python3",
       "args": ["-m", "caelum_analytics.workflow_servers.business.server"],
       "env": {
         "CAELUM_ENV_FILE": "/home/rford/.caelum/.env"
@@ -19,7 +19,7 @@
       "description": "Business intelligence and market research - market analysis, opportunity discovery, user profiles"
     },
     "caelum-infrastructure-workflow": {
-      "command": "python",
+      "command": "python3",
       "args": ["-m", "caelum_analytics.workflow_servers.infrastructure.server"],
       "env": {
         "CAELUM_ENV_FILE": "/home/rford/.caelum/.env"
@@ -28,7 +28,7 @@
       "description": "Infrastructure and deployment management - device orchestration, cluster communication, workflows"
     },
     "caelum-communication-workflow": {
-      "command": "python",
+      "command": "python3",
       "args": ["-m", "caelum_analytics.workflow_servers.communication.server"],
       "env": {
         "CAELUM_ENV_FILE": "/home/rford/.caelum/.env"
@@ -37,7 +37,7 @@
       "description": "Communication and knowledge management - notifications, intelligence hub, content management"
     },
     "caelum-security-workflow": {
-      "command": "python",
+      "command": "python3",
       "args": ["-m", "caelum_analytics.workflow_servers.security.server"],
       "env": {
         "CAELUM_ENV_FILE": "/home/rford/.caelum/.env"
