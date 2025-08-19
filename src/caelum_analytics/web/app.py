@@ -20,6 +20,7 @@ from ..distributed_code_analysis import distributed_analyzer, AnalysisType
 from ..port_enforcer import PortEnforcer, require_port
 # UDP beacon discovery removed - should use cluster-communication-server MCP tools instead
 from ..claude_sync import claude_sync
+from .caelum_cluster_monitor import router as cluster_monitor_router
 
 # Create FastAPI application
 app = FastAPI(
@@ -42,6 +43,9 @@ app.add_middleware(
 # Mount static files and templates
 app.mount("/static", StaticFiles(directory=settings.static_dir), name="static")
 templates = Jinja2Templates(directory=settings.templates_dir)
+
+# Include cluster monitor router
+app.include_router(cluster_monitor_router)
 
 
 # WebSocket connection manager

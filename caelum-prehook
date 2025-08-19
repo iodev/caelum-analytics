@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""
+Caelum Pre-hook CLI Tool
+
+Manages tool pre-screening for external LLMs with tool count limits.
+Usage: caelum-prehook <command> [options]
+"""
+
+import asyncio
+import sys
+import json
+import argparse
+from pathlib import Path
+
+# Add the src directory to Python path
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+
+from caelum_analytics.llm_prehook import llm_prehook
+from caelum_analytics.claude_cli_integration import claude_cli_integration
+from caelum_analytics.tool_prescreener import tool_prescreener
+
+async def cmd_analyze(args):
+    """Analyze a query and show tool recommendations"""
+    await tool_prescreener.initialize_tool_registry()
+    
+    report = await tool_prescreener.get_prescreening_report(args.query)
+    
+    print("=== Query Analysis ===")
+    print(f"Intent: {report['query_analysis']['intent']}")
+    print(f"Complexity: {report['query_analysis']['complexity']}")
+    print(f"Estimated tools needed: {report['query_analysis']['estimated_tools_needed']}")
+    print(f"Key entities: {', '.join(report['query_analysis']['entities'])}")
+    
+    print("\n=== Tool Selection ===")
+    print(f"Total available: {report['tool_selection']['total_available']}")
+    print(f"Selected: {report['tool_selection']['selected_count']}")
+    print(f"Reduction: {report['tool_selection']['reduction_percentage']}%")
+    
+    print("\n=== Server Distribution ===")
+    for server, count in report['server_distribution'].items():
+        print(f"  {server}: {count} tools")
+    
+    if args.verbose:
+        print("\n=== Selected Tools ===")
+        for tool in report['tool_selection']['selected_tools'][:20]:  # Show first 20
+            print(f"  {tool}")
+        if len(report['tool_selection']['selected_tools']) > 20:
+            print(f"  ... and {len(report['tool_selection']['selected_tools']) - 20} more")
+    
+    if report['recommendations']:
+        print("\n=== Recommendations ===")
+        for rec in report['recommendations']:
+            print(f"  • {rec}")
+
+async def cmd_setup_provider(args):
+    """Set up a provider-specific wrapper"""
+    await claude_cli_integration.initialize()
+    
+    # Configure the provider
+    llm_prehook.configure_llm_provider(
+        args.provider,
+        args.max_tools,
+        args.cost_per_request,
+        args.priority_categories.split(',') if args.priority_categories else None
+    )
+    
+    # Create wrapper script
+    wrapper_path = await claude_cli_integration.create_provider_wrapper_script(args.provider)
+    
+    print(f"✅ Provider '{args.provider}' configured successfully!")
+    print(f"📁 Wrapper script created: {wrapper_path}")
+    print(f"🚀 Usage: claude-{args.provider} \"your query here\"")
+    print(f"⚙️  Max tools: {args.max_tools}")
+
+async def cmd_test_provider(args):
+    """Test provider configuration with a sample query"""
+    await claude_cli_integration.initialize()
+    
+    print(f"Testing {args.provider} with query: {args.query}")
+    
+    result = await claude_cli_integration.run_claude_with_provider(
+        args.provider,
+        args.query,
+        args.claude_args.split() if args.claude_args else None
+    )
+    
+    print("=== Result ===")
+    print(result.stdout)
+    
+    if result.stderr:
+        print("=== Errors ===")
+        print(result.stderr)
+    
+    print(f"\n=== Exit Code: {result.returncode} ===")
+
+async def cmd_status(args):
+    """Show system status and statistics"""
+    await tool_prescreener.initialize_tool_registry()
+    await llm_prehook.initialize()
+    
+    print("=== Caelum Pre-hook System Status ===")
+    print(f"✅ Tool prescreener: {len(tool_prescreener.tool_registry)} tools registered")
+    print(f"✅ LLM pre-hook: {'Enabled' if llm_prehook.hook_enabled else 'Disabled'}")
+    
+    print("\n=== Configured Providers ===")
+    for provider, config in llm_prehook.external_llm_configs.items():
+        print(f"  {provider}:")
+        print(f"    Max tools: {config['max_tools']}")
+        print(f"    Cost per request: ${config['cost_per_request']:.4f}")
+        print(f"    Priority categories: {', '.join(config['priority_categories'])}")
+    
+    # Check for wrapper scripts
+    wrapper_dir = Path.home() / ".local" / "bin"
+    wrappers = list(wrapper_dir.glob("claude-*")) if wrapper_dir.exists() else []
+    
+    if wrappers:
+        print("\n=== Available Wrappers ===")
+        for wrapper in wrappers:
+            provider = wrapper.name.replace("claude-", "")
+            print(f"  claude-{provider}")
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Caelum Pre-hook CLI Tool for managing tool pre-screening"
+    )
+    
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    
+    # Analyze command
+    analyze_parser = subparsers.add_parser('analyze', help='Analyze query and show tool recommendations')
+    analyze_parser.add_argument('query', help='Query to analyze')
+    analyze_parser.add_argument('-v', '--verbose', action='store_true', help='Show detailed output')
+    
+    # Setup provider command
+    setup_parser = subparsers.add_parser('setup-provider', help='Set up a provider-specific wrapper')
+    setup_parser.add_argument('provider', help='Provider name (e.g., github-copilot)')
+    setup_parser.add_argument('--max-tools', type=int, default=100, help='Maximum tools for provider')
+    setup_parser.add_argument('--cost-per-request', type=float, default=0.01, help='Cost per request estimate')
+    setup_parser.add_argument('--priority-categories', help='Comma-separated priority categories')
+    
+    # Test provider command
+    test_parser = subparsers.add_parser('test', help='Test provider configuration')
+    test_parser.add_argument('provider', help='Provider name to test')
+    test_parser.add_argument('query', help='Test query')
+    test_parser.add_argument('--claude-args', help='Additional Claude CLI arguments')
+    
+    # Status command
+    status_parser = subparsers.add_parser('status', help='Show system status')
+    
+    # Examples command
+    examples_parser = subparsers.add_parser('examples', help='Show usage examples')
+    
+    args = parser.parse_args()
+    
+    if not args.command:
+        parser.print_help()
+        return
+    
+    if args.command == 'examples':
+        print_examples()
+        return
+    
+    # Run async command
+    if args.command == 'analyze':
+        asyncio.run(cmd_analyze(args))
+    elif args.command == 'setup-provider':
+        asyncio.run(cmd_setup_provider(args))
+    elif args.command == 'test':
+        asyncio.run(cmd_test_provider(args))
+    elif args.command == 'status':
+        asyncio.run(cmd_status(args))
+
+def print_examples():
+    """Print usage examples"""
+    examples = """
+=== Caelum Pre-hook Usage Examples ===
+
+1. Analyze a query to see tool recommendations:
+   caelum-prehook analyze "analyze the security of my Python code"
+
+2. Set up GitHub Copilot with 100 tool limit:
+   caelum-prehook setup-provider github-copilot --max-tools 100 --cost-per-request 0.002
+
+3. Set up OpenAI GPT-4 with custom categories:
+   caelum-prehook setup-provider openai-gpt4 --max-tools 128 --priority-categories "core,analysis,business"
+
+4. Test a provider configuration:
+   caelum-prehook test github-copilot "help me optimize this React component"
+
+5. Check system status:
+   caelum-prehook status
+
+6. Use provider-specific wrappers (after setup):
+   claude-github-copilot "analyze my TypeScript code for performance issues"
+   claude-openai-gpt4 "research the market for AI development tools"
+
+=== Integration with External Tools ===
+
+The pre-hook system automatically:
+• Reduces 169+ tools to <100 for GitHub Copilot
+• Analyzes query intent to select most relevant tools
+• Tracks cost savings and optimization metrics
+• Creates provider-specific configurations
+
+=== Benefits ===
+• ✅ Stay within external LLM tool limits
+• 💰 Reduce costs by optimizing tool selection
+• ⚡ Faster response times with focused toolsets
+• 📊 Track optimization performance over time
+"""
+    print(examples)
+
+if __name__ == "__main__":
+    main()
