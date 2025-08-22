@@ -64,8 +64,10 @@ class UDPBeaconDiscovery:
         self.is_running = False
         self.beacon_socket: Optional[socket.socket] = None
         self.listen_socket: Optional[socket.socket] = None
+        self.cluster_listen_socket: Optional[socket.socket] = None
         self.beacon_thread: Optional[threading.Thread] = None
         self.listen_thread: Optional[threading.Thread] = None
+        self.cluster_listen_thread: Optional[threading.Thread] = None
         
         # Discovered machines from UDP beacons
         self.discovered_machines: Dict[str, dict] = {}
@@ -90,6 +92,7 @@ class UDPBeaconDiscovery:
         try:
             self._setup_beacon_socket()
             self._setup_listen_socket()
+            self._setup_cluster_listen_socket()
             
             self.is_running = True
             
@@ -97,11 +100,15 @@ class UDPBeaconDiscovery:
             self.beacon_thread = threading.Thread(target=self._beacon_loop, daemon=True)
             self.beacon_thread.start()
             
-            # Start listening thread
+            # Start listening thread for analytics beacons
             self.listen_thread = threading.Thread(target=self._listen_loop, daemon=True)
             self.listen_thread.start()
             
-            logger.info(f"UDP beacon discovery started on port {BEACON_PORT}")
+            # Start listening thread for cluster beacons
+            self.cluster_listen_thread = threading.Thread(target=self._cluster_listen_loop, daemon=True)
+            self.cluster_listen_thread.start()
+            
+            logger.info(f"UDP beacon discovery started on port {BEACON_PORT} (analytics) and 8081 (clusters)")
             
         except Exception as e:
             logger.error(f"Failed to start UDP beacon discovery: {e}")
@@ -125,12 +132,22 @@ class UDPBeaconDiscovery:
                 pass
             self.listen_socket = None
         
+        if self.cluster_listen_socket:
+            try:
+                self.cluster_listen_socket.close()
+            except:
+                pass
+            self.cluster_listen_socket = None
+        
         # Wait for threads to finish
         if self.beacon_thread and self.beacon_thread.is_alive():
             self.beacon_thread.join(timeout=2)
         
         if self.listen_thread and self.listen_thread.is_alive():
             self.listen_thread.join(timeout=2)
+        
+        if self.cluster_listen_thread and self.cluster_listen_thread.is_alive():
+            self.cluster_listen_thread.join(timeout=2)
         
         logger.info("UDP beacon discovery stopped")
     
@@ -170,6 +187,32 @@ class UDPBeaconDiscovery:
             logger.error(f"Failed to setup listen socket: {e}")
             raise
     
+    def _setup_cluster_listen_socket(self):
+        """Setup UDP socket for listening to Caelum cluster beacons on port 8081."""
+        self.cluster_listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.cluster_listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        
+        # Try ports 8081, then fallback ports if 8081 is busy
+        cluster_ports = [8081, 8083, 8084, 8085]
+        
+        for port in cluster_ports:
+            try:
+                self.cluster_listen_socket.bind(('', port))
+                self.cluster_listen_socket.settimeout(1.0)
+                logger.info(f"Cluster beacon listener bound to port {port}")
+                return
+                
+            except OSError as e:
+                if port == cluster_ports[-1]:  # Last port
+                    logger.warning(f"Failed to bind cluster listen socket to any port: {e}")
+                    # Don't raise - just warn and continue without cluster listening
+                    self.cluster_listen_socket.close()
+                    self.cluster_listen_socket = None
+                    return
+                else:
+                    logger.debug(f"Port {port} busy, trying next port")
+                    continue
+    
     def _beacon_loop(self):
         """Main beacon broadcasting loop."""
         logger.info("UDP beacon broadcasting started")
@@ -206,6 +249,42 @@ class UDPBeaconDiscovery:
             except Exception as e:
                 if self.is_running:
                     logger.error(f"Error in listen loop: {e}")
+                time.sleep(1)
+    
+    def _cluster_listen_loop(self):
+        """Main cluster beacon listening loop."""
+        if not self.cluster_listen_socket:
+            logger.info("Cluster beacon listening disabled (no available port)")
+            return
+            
+        logger.info("UDP cluster beacon listening started")
+        
+        while self.is_running:
+            try:
+                if self.cluster_listen_socket:
+                    try:
+                        data, addr = self.cluster_listen_socket.recvfrom(4096)
+                        # Handle cluster beacons directly
+                        try:
+                            cluster_beacon = json.loads(data.decode('utf-8'))
+                            if cluster_beacon.get('type') in ['beacon', 'discovery'] and 'clusterId' in cluster_beacon:
+                                self._handle_cluster_beacon(cluster_beacon, addr[0])
+                        except Exception as e:
+                            logger.debug(f"Invalid cluster beacon from {addr[0]}: {e}")
+                            
+                    except socket.timeout:
+                        # Normal timeout, continue
+                        continue
+                    except Exception as e:
+                        if self.is_running:
+                            logger.warning(f"Error receiving cluster beacon: {e}")
+                else:
+                    # No cluster socket, just sleep
+                    time.sleep(1)
+                
+            except Exception as e:
+                if self.is_running:
+                    logger.error(f"Error in cluster listen loop: {e}")
                 time.sleep(1)
     
     def _send_beacon(self):
@@ -289,54 +368,115 @@ class UDPBeaconDiscovery:
     def _handle_beacon_message(self, data: bytes, sender_ip: str):
         """Handle received beacon message."""
         try:
-            beacon = BeaconMessage.from_json(data)
-            
-            # Ignore our own beacons
-            if beacon.machine_id == machine_registry.local_machine_id:
-                return
-            
-            # Validate beacon
-            if beacon.message_type != "CAELUM_BEACON":
-                return
-            
-            current_time = time.time()
-            machine_id = beacon.machine_id
-            
-            # Update discovered machines
-            machine_info = {
-                'machine_id': beacon.machine_id,
-                'hostname': beacon.hostname,
-                'primary_ip': beacon.primary_ip,
-                'sender_ip': sender_ip,
-                'cluster_id': beacon.cluster_id,
-                'cluster_name': beacon.cluster_name,
-                'websocket_port': beacon.websocket_port,
-                'services': beacon.services,
-                'last_seen': current_time,
-                'discovery_method': 'UDP_BEACON'
-            }
-            
-            # Check if this is a new discovery
-            is_new = machine_id not in self.discovered_machines
-            
-            self.discovered_machines[machine_id] = machine_info
-            self.last_seen[machine_id] = current_time
-            
-            if is_new:
-                logger.info(f"🎯 UDP discovered new Caelum machine: {beacon.hostname} ({beacon.primary_ip})")
+            # Try to parse as Caelum Analytics beacon first
+            try:
+                beacon = BeaconMessage.from_json(data)
                 
-                # Try to create and register MachineNode
-                try:
-                    # We need more complete information to create a full MachineNode
-                    # For now, we'll notify callbacks and let WebSocket handle full registration
-                    for callback in self.discovery_callbacks:
-                        callback(machine_info)
-                        
-                except Exception as e:
-                    logger.error(f"Failed to register discovered machine: {e}")
+                # Ignore our own beacons
+                if beacon.machine_id == machine_registry.local_machine_id:
+                    return
+                
+                # Validate beacon
+                if beacon.message_type == "CAELUM_BEACON":
+                    self._handle_analytics_beacon(beacon, sender_ip)
+                    return
+            except:
+                pass
+            
+            # Try to parse as regular Caelum cluster beacon
+            try:
+                cluster_beacon = json.loads(data.decode('utf-8'))
+                if cluster_beacon.get('type') in ['beacon', 'discovery'] and 'clusterId' in cluster_beacon:
+                    self._handle_cluster_beacon(cluster_beacon, sender_ip)
+                    return
+            except:
+                pass
+                
+            logger.debug(f"Unknown beacon format from {sender_ip}")
             
         except Exception as e:
             logger.warning(f"Invalid beacon message from {sender_ip}: {e}")
+    
+    def _handle_analytics_beacon(self, beacon: BeaconMessage, sender_ip: str):
+        """Handle Caelum Analytics beacon message."""
+        current_time = time.time()
+        machine_id = beacon.machine_id
+        
+        # Update discovered machines
+        machine_info = {
+            'machine_id': beacon.machine_id,
+            'hostname': beacon.hostname,
+            'primary_ip': beacon.primary_ip,
+            'sender_ip': sender_ip,
+            'cluster_id': beacon.cluster_id,
+            'cluster_name': beacon.cluster_name,
+            'websocket_port': beacon.websocket_port,
+            'services': beacon.services,
+            'last_seen': current_time,
+            'discovery_method': 'UDP_BEACON',
+            'type': 'caelum-analytics'
+        }
+        
+        # Check if this is a new discovery
+        is_new = machine_id not in self.discovered_machines
+        
+        self.discovered_machines[machine_id] = machine_info
+        self.last_seen[machine_id] = current_time
+        
+        if is_new:
+            logger.info(f"🎯 UDP discovered new Caelum Analytics machine: {beacon.hostname} ({beacon.primary_ip})")
+            
+            # Try to create and register MachineNode
+            try:
+                # We need more complete information to create a full MachineNode
+                # For now, we'll notify callbacks and let WebSocket handle full registration
+                for callback in self.discovery_callbacks:
+                    callback(machine_info)
+                    
+            except Exception as e:
+                logger.error(f"Failed to register discovered machine: {e}")
+    
+    def _handle_cluster_beacon(self, beacon_data: dict, sender_ip: str):
+        """Handle regular Caelum cluster beacon message."""
+        current_time = time.time()
+        cluster_id = beacon_data.get('clusterId')
+        
+        if not cluster_id:
+            return
+            
+        # Update discovered machines
+        machine_info = {
+            'machine_id': cluster_id,
+            'hostname': beacon_data.get('clusterName', 'Unknown Caelum'),
+            'primary_ip': sender_ip,
+            'sender_ip': sender_ip,
+            'cluster_id': cluster_id,
+            'cluster_name': beacon_data.get('clusterName', ''),
+            'websocket_port': beacon_data.get('wsPort', 8080),
+            'services': [],
+            'capabilities': beacon_data.get('capabilities', []),
+            'role': beacon_data.get('role', 'unknown'),
+            'last_seen': current_time,
+            'discovery_method': 'UDP_BEACON',
+            'type': 'caelum-cluster'
+        }
+        
+        # Check if this is a new discovery
+        is_new = cluster_id not in self.discovered_machines
+        
+        self.discovered_machines[cluster_id] = machine_info
+        self.last_seen[cluster_id] = current_time
+        
+        if is_new:
+            logger.info(f"🎯 UDP discovered new Caelum cluster: {beacon_data.get('clusterName', 'Unknown')} ({sender_ip})")
+            
+            # Notify callbacks
+            try:
+                for callback in self.discovery_callbacks:
+                    callback(machine_info)
+                    
+            except Exception as e:
+                logger.error(f"Failed to register discovered cluster: {e}")
     
     def _cleanup_offline_machines(self):
         """Remove machines that haven't sent beacons recently."""
