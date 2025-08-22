@@ -191,12 +191,28 @@ class ClusterNode:
             port = self.port
 
         try:
+            # Check if we already have a connection to this machine
+            # Look for existing connections by checking if any start with the host
+            for conn_id in list(self.connections.keys()):
+                if host in conn_id:
+                    logger.info(f"Already connected to {host} (connection ID: {conn_id})")
+                    # Test if connection is still alive
+                    try:
+                        await self.connections[conn_id].ping()
+                        return True  # Connection is still good
+                    except:
+                        # Connection is dead, remove it
+                        logger.info(f"Removing dead connection to {conn_id}")
+                        del self.connections[conn_id]
+
             uri = f"ws://{host}:{port}"
+            logger.info(f"Attempting to connect to {uri}")
             websocket = await websockets.connect(uri)
 
-            # Register this connection
+            # Register this connection with a temporary ID
             machine_id = f"remote-{host}-{port}"
             self.connections[machine_id] = websocket
+            logger.info(f"Initial connection established with temporary ID: {machine_id}")
 
             # Start listening for messages
             asyncio.create_task(self._listen_to_connection(websocket, machine_id))
@@ -204,7 +220,7 @@ class ClusterNode:
             # Send machine registration
             await self._send_machine_register(websocket)
 
-            logger.info(f"Connected to cluster node at {uri}")
+            logger.info(f"Successfully connected to cluster node at {uri}")
             return True
 
         except Exception as e:
@@ -240,14 +256,38 @@ class ClusterNode:
 
     async def _listen_to_connection(self, websocket, machine_id: str):
         """Listen for messages from a specific connection."""
+        current_machine_id = machine_id  # Track the current machine ID
         try:
             async for message in websocket:
-                cluster_msg = ClusterMessage.from_json(message)
-                await self._process_message(cluster_msg, websocket)
+                try:
+                    cluster_msg = ClusterMessage.from_json(message)
+                    
+                    # Update connection mapping if we receive a MACHINE_REGISTER or MACHINE_UPDATE
+                    if cluster_msg.message_type in [MessageType.MACHINE_REGISTER, MessageType.MACHINE_UPDATE]:
+                        real_machine_id = cluster_msg.source_machine
+                        if real_machine_id and real_machine_id != current_machine_id:
+                            # Remove old temporary connection key
+                            if current_machine_id in self.connections:
+                                del self.connections[current_machine_id]
+                            # Add connection with real machine ID
+                            self.connections[real_machine_id] = websocket
+                            logger.info(f"Updated connection key from {current_machine_id} to {real_machine_id}")
+                            current_machine_id = real_machine_id
+                    
+                    await self._process_message(cluster_msg, websocket)
+                except json.JSONDecodeError as e:
+                    logger.error(f"Invalid JSON from {current_machine_id}: {e}")
+                    logger.debug(f"Raw message: {message}")
+                except KeyError as e:
+                    logger.error(f"Missing required field in message from {current_machine_id}: {e}")
+                    logger.debug(f"Raw message: {message}")
+                except Exception as e:
+                    logger.error(f"Error processing message from {current_machine_id}: {e}")
+                    logger.debug(f"Raw message: {message}")
         except websockets.exceptions.ConnectionClosed:
-            logger.info(f"Connection to {machine_id} closed")
-            if machine_id in self.connections:
-                del self.connections[machine_id]
+            logger.info(f"Connection to {current_machine_id} closed")
+            if current_machine_id in self.connections:
+                del self.connections[current_machine_id]
 
     async def _process_message(self, message: ClusterMessage, websocket):
         """Process incoming cluster message."""

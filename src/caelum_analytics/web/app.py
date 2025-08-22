@@ -663,10 +663,18 @@ async def dashboard():
                     taskQueueElement.textContent = `${data.pending_tasks} pending`;
                 }
                 
-                // Update connections display
+                // Update connections display with more detail
                 const connectionsDiv = document.getElementById('cluster-connections');
                 if (connectionsDiv) {
-                    if (data.connected_machines && data.connected_machines.length > 0) {
+                    if (data.connection_details && data.connection_details.length > 0) {
+                        connectionsDiv.innerHTML = data.connection_details.map(conn => 
+                            `<div class="metric">
+                                <span class="metric-label">${conn.machine_id}</span>
+                                <span class="status ${conn.connected ? 'online' : 'offline'}">${conn.connected ? 'CONNECTED' : 'DISCONNECTED'}</span>
+                            </div>`
+                        ).join('');
+                    } else if (data.connected_machines && data.connected_machines.length > 0) {
+                        // Fallback to simple list if no detailed info
                         connectionsDiv.innerHTML = data.connected_machines.map(machine => 
                             `<div class="metric"><span class="metric-label">${machine}</span><span class="status online">CONNECTED</span></div>`
                         ).join('');
@@ -1259,10 +1267,28 @@ async def get_cluster_status():
             "error": "Cluster node not initialized"
         }
         
+    # Get more detailed connection info
+    connection_details = []
+    for machine_id, ws in cluster_node.connections.items():
+        try:
+            # Check if connection is still alive
+            connection_details.append({
+                "machine_id": machine_id,
+                "connected": not ws.closed,
+                "remote_address": str(ws.remote_address) if hasattr(ws, 'remote_address') else "unknown"
+            })
+        except:
+            connection_details.append({
+                "machine_id": machine_id,
+                "connected": False,
+                "remote_address": "unknown"
+            })
+    
     return {
         "cluster_server_running": cluster_server is not None,
         "local_machine_id": cluster_node.machine_id,
         "connected_machines": list(cluster_node.connections.keys()),
+        "connection_details": connection_details,
         "discovered_machines": list(cluster_node.discovered_machines.keys()),
         "pending_tasks": len(cluster_node.pending_tasks),
         "resource_reservations": len(cluster_node.resource_reservations),
@@ -1315,9 +1341,15 @@ async def discover_network_machines():
 
     await cluster_node.broadcast_message(message)
 
-    # TODO: Use cluster-communication-server MCP tools instead of direct UDP discovery
-    # Should call MCP tool: list_clusters from cluster-communication-server
-    udp_discovered = []  # Placeholder - implement MCP API call
+    # Trigger UDP discovery to find machines on the network
+    from ..udp_beacon import trigger_udp_discovery, get_udp_discovered_machines
+    
+    # Get existing UDP discovered machines
+    udp_discovered = get_udp_discovered_machines()
+    
+    # Trigger fresh discovery
+    new_udp_discovered = trigger_udp_discovery()
+    logger.info(f"UDP discovery found {len(new_udp_discovered)} new machines, {len(udp_discovered)} total")
     
     # Also do traditional network scanning
     discovered_endpoints = await machine_registry.discover_network_machines()
