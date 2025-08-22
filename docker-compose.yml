@@ -1,0 +1,154 @@
+version: '3.8'
+
+services:
+  caelum-analytics:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: caelum-analytics:latest
+    container_name: caelum-analytics
+    restart: unless-stopped
+    
+    # Port mappings based on recent architecture changes
+    ports:
+      # Main analytics web dashboard
+      - "8090:8090"
+      
+      # UDP beacon discovery ports
+      - "8181:8181/udp"  # Analytics beacon broadcasts/listening
+      - "8083:8083/udp"  # Cluster beacon fallback listening
+      
+      # WebSocket cluster communication (configurable range)
+      - "8095:8095"      # Primary WebSocket port
+    
+    # Network mode for UDP discovery across LAN
+    network_mode: "host"
+    
+    environment:
+      # Core application settings
+      - CAELUM_ANALYTICS_HOST=0.0.0.0
+      - CAELUM_ANALYTICS_PORT=8090
+      - DEBUG=false
+      - LOG_LEVEL=info
+      
+      # Cluster communication
+      - CLUSTER_COMMUNICATION_PORT=8095
+      
+      # Database connections (update these for your environment)
+      - INFLUXDB_URL=http://10.32.3.27:8086
+      - INFLUXDB_TOKEN=dev-token
+      - INFLUXDB_ORG=caelum
+      - INFLUXDB_BUCKET=metrics
+      - REDIS_URL=redis://10.32.3.27:6379
+      - POSTGRES_URL=postgresql://user:password@10.32.3.27:5432/caelum_analytics
+      
+      # External services
+      - PROMETHEUS_URL=http://10.32.3.27:9090
+      - GRAFANA_URL=http://10.32.3.27:3000
+      
+      # Security
+      - SECRET_KEY=change-this-in-production
+      
+      # MCP configuration path (adjust for your setup)
+      - MCP_SERVERS_CONFIG_PATH=/app/config/claude_desktop_config.json
+    
+    volumes:
+      # Mount configuration files
+      - ~/.claude/claude_desktop_config.json:/app/config/claude_desktop_config.json:ro
+      
+      # Mount logs directory for persistence
+      - ./logs:/app/logs
+      
+      # Mount static assets if you need to customize
+      - ./static:/app/static
+      - ./templates:/app/templates
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    depends_on:
+      - redis
+      - influxdb
+      - postgres
+    
+    labels:
+      - "caelum.service=analytics"
+      - "caelum.type=monitoring"
+      - "caelum.port.web=8090"
+      - "caelum.port.beacon=8181"
+
+  # Optional: Include supporting services
+  redis:
+    image: redis:7-alpine
+    container_name: caelum-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: caelum-influxdb
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=changeme123
+      - DOCKER_INFLUXDB_INIT_ORG=caelum
+      - DOCKER_INFLUXDB_INIT_BUCKET=metrics
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=dev-token-change-in-production
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+      - influxdb_config:/etc/influxdb2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: caelum-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=caelum_analytics
+      - POSTGRES_USER=caelum
+      - POSTGRES_PASSWORD=changeme123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U caelum -d caelum_analytics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  redis_data:
+    driver: local
+  influxdb_data:
+    driver: local
+  influxdb_config:
+    driver: local
+  postgres_data:
+    driver: local
+
+networks:
+  default:
+    name: caelum-analytics-network
+    driver: bridge

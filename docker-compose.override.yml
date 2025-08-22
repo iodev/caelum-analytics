@@ -1,0 +1,47 @@
+# Development overrides for docker-compose.yml
+# This file is automatically used when running `docker-compose up`
+
+version: '3.8'
+
+services:
+  caelum-analytics:
+    # Development build with live code mounting
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development  # If you add multi-stage build later
+    
+    # Mount source code for live development
+    volumes:
+      - ./src:/app/src
+      - ./static:/app/static
+      - ./templates:/app/templates
+      - ~/.claude/claude_desktop_config.json:/app/config/claude_desktop_config.json:ro
+      - ./logs:/app/logs
+    
+    # Development environment variables
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=debug
+      - RELOAD=true
+    
+    # Override command for development with auto-reload
+    command: ["uv", "run", "uvicorn", "caelum_analytics.web.app:app", "--reload", "--host", "0.0.0.0", "--port", "8090"]
+    
+    # Disable healthcheck in development for faster startup
+    healthcheck:
+      disable: true
+
+  # Use lighter services for development
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --save 60 1
+    
+  influxdb:
+    environment:
+      - DOCKER_INFLUXDB_INIT_PASSWORD=dev123
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=dev-token
+    
+  postgres:
+    environment:
+      - POSTGRES_PASSWORD=dev123

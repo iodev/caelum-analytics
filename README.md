@@ -54,15 +54,91 @@ cp .env.example .env
 
 ### Running the Dashboard
 
+#### Quick Start (Recommended)
 ```bash
-# Start web dashboard
-uv run caelum-dashboard
-
-# Start data collectors (separate terminal)
-uv run caelum-collector
+# Start the analytics server (production-ready)
+uv run uvicorn caelum_analytics.web.app:app --host 0.0.0.0 --port 8090
 
 # Development mode with hot reload
 uv run uvicorn caelum_analytics.web.app:app --reload --host 0.0.0.0 --port 8090
+```
+
+#### Starting & Stopping the Server
+
+**Start the Server:**
+```bash
+# Method 1: Production mode
+uv run uvicorn caelum_analytics.web.app:app --host 0.0.0.0 --port 8090
+
+# Method 2: Development mode (with auto-reload)
+uv run uvicorn caelum_analytics.web.app:app --reload --host 0.0.0.0 --port 8090
+
+# Method 3: Background mode
+nohup uv run uvicorn caelum_analytics.web.app:app --host 0.0.0.0 --port 8090 > logs/server.log 2>&1 &
+```
+
+**Stop the Server:**
+```bash
+# Find and kill the server process
+ps aux | grep "uvicorn.*caelum_analytics" | grep -v grep
+kill <PID>
+
+# Or kill all uvicorn processes (be careful!)
+pkill -f "uvicorn.*caelum_analytics"
+
+# Or use Ctrl+C if running in foreground
+```
+
+**Check Server Status:**
+```bash
+# Check if server is running
+curl http://localhost:8090/health
+
+# Check what's using port 8090
+lsof -i :8090
+
+# View server logs (if running in background)
+tail -f logs/server.log
+```
+
+#### Docker Deployment (Alternative)
+
+**Option 1: Docker Compose (Recommended)**
+```bash
+# Development mode (with auto-reload and mounted source)
+docker-compose up -d
+
+# Production mode (optimized, stable)
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+# View logs
+docker-compose logs -f caelum-analytics
+
+# Stop services
+docker-compose down
+```
+
+**Option 2: Direct Docker**
+```bash
+# Build and run with Docker
+docker build -t caelum-analytics .
+docker stop caelum-analytics 2>/dev/null && docker rm caelum-analytics 2>/dev/null
+docker run -d -p 8090:8090 --name caelum-analytics caelum-analytics
+```
+
+**Docker Configuration Files:**
+- `docker-compose.yml` - Base configuration with supporting services
+- `docker-compose.override.yml` - Development overrides (auto-applied)
+- `docker-compose.prod.yml` - Production optimizations
+- `.env.example` - Environment variable template
+
+#### Additional Components (Optional)
+```bash
+# Start data collectors (separate terminal)
+uv run caelum-collector
+
+# Start other services if needed
+# Note: Main dashboard includes basic monitoring by default
 ```
 
 ## 📊 Features
@@ -265,8 +341,8 @@ sudo systemctl start caelum-analytics
 ## 📖 API Documentation
 
 Interactive API documentation available at:
-- Swagger UI: `http://localhost:8080/docs`
-- ReDoc: `http://localhost:8080/redoc`
+- Swagger UI: `http://localhost:8090/docs`
+- ReDoc: `http://localhost:8090/redoc`
 
 ### Key Endpoints
 
